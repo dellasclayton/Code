@@ -30,21 +30,21 @@ CREATE TABLE IF NOT EXISTS characters (
     name TEXT NOT NULL,
     voice TEXT DEFAULT NULL,
     system_prompt TEXT DEFAULT NULL,
-    image_url TEXT DEFAULT '',
+    image_url TEXT DEFAULT NULL,
     images TEXT DEFAULT '[]',
     is_active INTEGER DEFAULT 0,
-    last_message TEXT DEFAULT '',
+    last_message TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS voices (
     voice TEXT PRIMARY KEY,
-    method TEXT DEFAULT '',
-    audio_path TEXT DEFAULT '',
-    text_path TEXT DEFAULT '',
-    speaker_desc TEXT DEFAULT '',
-    scene_prompt TEXT DEFAULT '',
+    method TEXT DEFAULT NULL,
+    audio_path TEXT DEFAULT NULL,
+    text_path TEXT DEFAULT NULL,
+    speaker_desc TEXT DEFAULT NULL,
+    scene_prompt TEXT DEFAULT NULL,
     audio_tokens TEXT DEFAULT NULL,
     id TEXT DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now')),
