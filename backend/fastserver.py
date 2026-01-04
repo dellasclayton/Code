@@ -641,15 +641,7 @@ class Speech:
                 logger.error(f"[TTS] Error generating audio: {e}")
                 continue
 
-    async def load_voice_method(self, voice: str):
-        """Load voice method"""
-
-        # checks voice "method" for character voice via db 
-        # if method = clone, we use prepare_voice_clone
-        # if method = profile, we use prepare_voice_profile
-    
-
-    async def prepare_voice_clone(self, voice: str):
+    async def load_voice_clone(self, voice: str):
         """Load reference audio and text for voice cloning"""
 
         # should be changed to get audio_path and text_path from db. still leads to same place and still has to read text.
@@ -665,28 +657,6 @@ class Speech:
         ]
 
         return messages
-
-    async def prepare_voice_profile(self, scene_prompt: str, speaker_desc: str, text: str):
-        """"""
-
-        # write simple query to get scene_prompt and speaker_desc from SQLite.
-        # need to verify the below should be messages = or system_message = or other.
-        # not sure about user content = text.
-
-        messages = [
-            Message(role="system",
-                    content=f"Generate audio following instruction.\n\n<|scene_desc_start|>\n{scene_prompt}\n\n" + "\n".join(speaker_desc) + "\n<|scene_desc_end|>"),
-
-            Message(role="user", content=text),
-            Message(role="assistant", content=AudioContent(audio_url=""))
-        ]
-
-
-    async def get_voice_profile_audio_tokens():
-        """get previously generated audio tokens/ids for voice consistency"""
-
-        # audio tokens from previous sessions stored in SQLite "voices" table in column "audio_tokens" as serialized json.
-
 
     def _deserialize_audio_ids(self, audio_tokens: Any) -> List[torch.Tensor]:
         if not audio_tokens:
