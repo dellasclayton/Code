@@ -6,7 +6,7 @@ create table public.characters (
   id text not null,
   voice text null,
   system_prompt text null,
-  is_active boolean null default true,
+  is_active boolean null default False,
   image_url text null,
   images jsonb null,
   created_at timestamp with time zone null default now(),

@@ -28,8 +28,8 @@ SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS characters (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    voice TEXT DEFAULT '',
-    system_prompt TEXT DEFAULT '',
+    voice TEXT DEFAULT NULL,
+    system_prompt TEXT DEFAULT NULL,
     image_url TEXT DEFAULT '',
     images TEXT DEFAULT '[]',
     is_active INTEGER DEFAULT 0,
