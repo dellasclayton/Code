@@ -557,7 +557,7 @@ class Speech:
         self.is_running = False
         self._task: Optional[asyncio.Task] = None
 
-        self.sample_rate = 2400
+        self.sample_rate = 24000
         self._chunk_size = 14
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self.generation_chunk_buffer_size = 2
