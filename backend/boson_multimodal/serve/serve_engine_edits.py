@@ -277,7 +277,12 @@ class HiggsAudioServeEngine:
             logger.info(f"Capturing CUDA graphs for each KV cache length")
             self.model.capture_model(self.kv_caches.values())
 
-    def _prepare_inputs(self, chat_ml_sample: ChatMLSample, force_audio_gen: bool = False):
+    def _prepare_inputs(
+        self,
+        chat_ml_sample: ChatMLSample,
+        force_audio_gen: bool = False,
+        context_audio_ids: Optional[List[torch.Tensor]] = None,
+    ):
         input_tokens, _, audio_contents, _ = prepare_chatml_sample(
             chat_ml_sample,
             self.tokenizer,
@@ -290,31 +295,37 @@ class HiggsAudioServeEngine:
         input_tokens.extend(postfix)
 
         # Configure the audio inputs
-        audio_ids_l = []
-        for audio_content in audio_contents:
-            if audio_content.audio_url not in ["placeholder", ""]:
-                raw_audio, _ = librosa.load(audio_content.audio_url, sr=self.audio_tokenizer.sampling_rate)
-            elif audio_content.raw_audio is not None:
-                raw_audio, _ = librosa.load(
-                    BytesIO(base64.b64decode(audio_content.raw_audio)), sr=self.audio_tokenizer.sampling_rate
+        audio_ids_start = None
+        audio_ids_concat = None
+        if context_audio_ids is not None:
+            if len(context_audio_ids) > 0:
+                audio_ids_concat = torch.concat([ele.cpu() for ele in context_audio_ids], dim=1)
+                audio_ids_start = torch.cumsum(
+                    torch.tensor([0] + [ele.shape[1] for ele in context_audio_ids], dtype=torch.long), dim=0
                 )
-            else:
-                raw_audio = None
-
-            if raw_audio is not None:
-                audio_ids = self.audio_tokenizer.encode(raw_audio, self.audio_tokenizer.sampling_rate)
-                audio_ids_l.append(audio_ids.squeeze(0).cpu())
-
-        if len(audio_ids_l) > 0:
-            audio_ids_start = torch.tensor(
-                np.cumsum(np.array([0] + [audio_ids.shape[1] for audio_ids in audio_ids_l])),
-                dtype=torch.long,
-                device=self.device,
-            )[0:-1]
-            audio_ids_concat = torch.cat(audio_ids_l, dim=1)
         else:
-            audio_ids_start = None
-            audio_ids_concat = None
+            audio_ids_l = []
+            for audio_content in audio_contents:
+                if audio_content.audio_url not in ["placeholder", ""]:
+                    raw_audio, _ = librosa.load(audio_content.audio_url, sr=self.audio_tokenizer.sampling_rate)
+                elif audio_content.raw_audio is not None:
+                    raw_audio, _ = librosa.load(
+                        BytesIO(base64.b64decode(audio_content.raw_audio)), sr=self.audio_tokenizer.sampling_rate
+                    )
+                else:
+                    raw_audio = None
+
+                if raw_audio is not None:
+                    audio_ids = self.audio_tokenizer.encode(raw_audio, self.audio_tokenizer.sampling_rate)
+                    audio_ids_l.append(audio_ids.squeeze(0).cpu())
+
+            if len(audio_ids_l) > 0:
+                audio_ids_start = torch.tensor(
+                    np.cumsum(np.array([0] + [audio_ids.shape[1] for audio_ids in audio_ids_l])),
+                    dtype=torch.long,
+                    device=self.device,
+                )[0:-1]
+                audio_ids_concat = torch.cat(audio_ids_l, dim=1)
 
         sample = ChatMLDatasetSample(
             input_ids=torch.LongTensor(input_tokens),
@@ -350,6 +361,7 @@ class HiggsAudioServeEngine:
         ras_win_len: Optional[int] = 7,
         ras_win_max_num_repeat: int = 2,
         seed: Optional[int] = None,
+        context_audio_ids: Optional[List[torch.Tensor]] = None,
     ):
         """
         Generate audio from a chatml sample.
@@ -374,7 +386,11 @@ class HiggsAudioServeEngine:
             ras_win_len = None
 
         with torch.no_grad():
-            inputs = self._prepare_inputs(chat_ml_sample, force_audio_gen=force_audio_gen)
+            inputs = self._prepare_inputs(
+                chat_ml_sample,
+                force_audio_gen=force_audio_gen,
+                context_audio_ids=context_audio_ids,
+            )
             prompt_token_ids = inputs["input_ids"][0].cpu().numpy()
 
             self._prepare_kv_caches()
@@ -437,6 +453,7 @@ class HiggsAudioServeEngine:
         ras_win_len: Optional[int] = 7,
         ras_win_max_num_repeat: int = 2,
         seed: Optional[int] = None,
+        context_audio_ids: Optional[List[torch.Tensor]] = None,
     ):
         """
         Generate audio from a chatml sample.
@@ -459,7 +476,11 @@ class HiggsAudioServeEngine:
             ras_win_len = None
 
         with torch.no_grad():
-            inputs = self._prepare_inputs(chat_ml_sample, force_audio_gen=force_audio_gen)
+            inputs = self._prepare_inputs(
+                chat_ml_sample,
+                force_audio_gen=force_audio_gen,
+                context_audio_ids=context_audio_ids,
+            )
 
             self._prepare_kv_caches()
 
