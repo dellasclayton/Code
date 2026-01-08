@@ -284,6 +284,14 @@ class ChatLLM:
         """Wrap response text with character name XML tags for conversation history."""
 
         return f"<{character_name}>{text}</{character_name}>"
+    
+    def global_roleplay_prompt(self, character: Character, user_name: str) -> Dict[str, str]:
+        """Create character instruction message for group chat with character tags."""
+
+        return {
+            'role': 'system',
+            'content': f'You are {character.name}, a roleplay actor engaging in a conversation with {user_name}. Your replies should be written in a conversational format, taking on the personality and characteristics of {character.name}.'
+        }
 
     def character_instruction_message(self, character: Character) -> Dict[str, str]:
         """Create character instruction message for group chat with character tags."""
@@ -440,9 +448,9 @@ class ChatLLM:
                 await on_text_stream_stop(character, message_id, full_response)
 
             if full_response:
-                response_wrapped = self.wrap_character_tags(full_response, character.name)
+                #response_wrapped = self.wrap_character_tags(full_response, character.name)
 
-                self.conversation_history.append({"role": "assistant", "name": character.name, "content": response_wrapped})
+                self.conversation_history.append({"role": "assistant", "name": character.name, "content": full_response})
 
                 # Save assistant message to database in background (non-blocking)
                 if self.conversation_id:
