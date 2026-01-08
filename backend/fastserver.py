@@ -569,7 +569,7 @@ class Speech:
         self._chunk_size = 14
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self.generation_chunk_buffer_size = 2
-        self._profile_context: Dict[str, Dict[str, Any]] = {}
+        self._voice_context: Dict[str, Dict[str, Any]] = {}
 
         self.voice_dir = "/workspace/tts/Code/backend/voices"
 
@@ -718,7 +718,7 @@ class Speech:
         return messages, generation_messages
 
     def _get_profile_context(self, voice: str, scene_prompt: str, speaker_desc: str) -> Dict[str, Any]:
-        context = self._profile_context.get(voice)
+        context = self._voice_context.get(voice)
         if (
             context
             and context.get("method") == "profile"
@@ -729,14 +729,8 @@ class Speech:
 
         messages, generation_messages = self.prepare_messages_context(scene_prompt, speaker_desc)
         generated_audio_ids: List[torch.Tensor] = []
-
-        cached_audio_tokens = db.get_cached_audio_tokens(voice)
-        cached_audio_ids = self._deserialize_audio_ids(cached_audio_tokens)
-        if cached_audio_ids:
-            generated_audio_ids = cached_audio_ids[-self.generation_chunk_buffer_size :]
-            for _ in generated_audio_ids:
-                generation_messages.append(Message(role="user", content=""))
-                generation_messages.append(Message(role="assistant", content=AudioContent(audio_url="")))
+        audio_tokens = db.get_cached_audio_tokens(voice)
+        audio_ids = self._deserialize_audio_ids(audio_tokens)
 
         context = {
             "method": "profile",
@@ -745,9 +739,9 @@ class Speech:
             "messages": messages,
             "generation_messages": generation_messages,
             "generated_audio_ids": generated_audio_ids,
-            "audio_ids": [],
+            "audio_ids": audio_ids,
         }
-        self._profile_context[voice] = context
+        self._voice_context[voice] = context
         return context
     
     def _get_clone_context(
@@ -757,7 +751,7 @@ class Speech:
         audio_path: str,
         text_path: str,
     ) -> Dict[str, Any]:
-        context = self._profile_context.get(voice)
+        context = self._voice_context.get(voice)
         if (
             context
             and context.get("method") == "clone"
@@ -780,17 +774,14 @@ class Speech:
         messages.append(Message(role="user", content=prompt_text))
         messages.append(Message(role="assistant", content=AudioContent(audio_url=audio_path)))
 
-        prompt_audio_ids = self.engine.audio_tokenizer.encode(audio_path)
-        audio_ids = [prompt_audio_ids.cpu()]
+        audio_tokens = db.get_cached_audio_tokens(voice)
+        audio_ids = self._deserialize_audio_ids(audio_tokens)
+        if not audio_ids and not audio_tokens:
+            prompt_audio_ids = self.engine.audio_tokenizer.encode(audio_path)
+            audio_ids = [prompt_audio_ids.cpu()]
+            db.update_cached_audio_tokens(voice, self._serialize_audio_ids(audio_ids))
 
         generated_audio_ids: List[torch.Tensor] = []
-        cached_audio_tokens = db.get_cached_audio_tokens(voice)
-        cached_audio_ids = self._deserialize_audio_ids(cached_audio_tokens)
-        if cached_audio_ids:
-            generated_audio_ids = cached_audio_ids[-self.generation_chunk_buffer_size :]
-            for _ in generated_audio_ids:
-                generation_messages.append(Message(role="user", content=""))
-                generation_messages.append(Message(role="assistant", content=AudioContent(audio_url="")))
 
         context = {
             "method": "clone",
@@ -802,7 +793,7 @@ class Speech:
             "generated_audio_ids": generated_audio_ids,
             "audio_ids": audio_ids,
         }
-        self._profile_context[voice] = context
+        self._voice_context[voice] = context
         return context
 
 
@@ -889,6 +880,9 @@ class Speech:
             if self.engine.model.config.use_delay_pattern:
                 audio_out_ids = revert_delay_pattern_full(audio_out_ids)
             audio_out_ids = audio_out_ids.clip(0, self.engine.audio_codebook_size - 1)[:, 1:-1]
+            if not audio_ids and not db.get_cached_audio_tokens(voice):
+                audio_ids.append(audio_out_ids.cpu())
+                db.update_cached_audio_tokens(voice, self._serialize_audio_ids(audio_ids))
             generated_audio_ids.append(audio_out_ids.cpu())
 
             generation_messages.append(Message(role="user", content=text))
@@ -900,8 +894,6 @@ class Speech:
             ):
                 generated_audio_ids[:] = generated_audio_ids[-self.generation_chunk_buffer_size :]
                 generation_messages[:] = generation_messages[(-2 * self.generation_chunk_buffer_size) :]
-
-            db.update_cached_audio_tokens(voice, self._serialize_audio_ids(generated_audio_ids))
 
         # Flush remaining tokens
         if seq_len > 0 and seq_len % self._chunk_size != 0 and audio_tokens:
