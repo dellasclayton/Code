@@ -644,7 +644,6 @@ class Speech:
     async def load_voice_clone(self, voice: str):
         """Load reference audio and text for voice cloning"""
 
-        # should be changed to get audio_path and text_path from db. still leads to same place and still has to read text.
         audio_path = os.path.join(self.voice_dir, f"{voice}.wav")
         text_path = os.path.join(self.voice_dir, f"{voice}.txt")
 
@@ -712,7 +711,12 @@ class Speech:
 
     def _get_profile_context(self, voice: str, scene_prompt: str, speaker_desc: str) -> Dict[str, Any]:
         context = self._profile_context.get(voice)
-        if context and context["scene_prompt"] == scene_prompt and context["speaker_desc"] == speaker_desc:
+        if (
+            context
+            and context.get("method") == "profile"
+            and context["scene_prompt"] == scene_prompt
+            and context["speaker_desc"] == speaker_desc
+        ):
             return context
 
         messages, generation_messages = self.prepare_messages_context(scene_prompt, speaker_desc)
@@ -727,6 +731,7 @@ class Speech:
                 generation_messages.append(Message(role="assistant", content=AudioContent(audio_url="")))
 
         context = {
+            "method": "profile",
             "scene_prompt": scene_prompt,
             "speaker_desc": speaker_desc,
             "messages": messages,
@@ -736,16 +741,77 @@ class Speech:
         }
         self._profile_context[voice] = context
         return context
+    
+    def _get_clone_context(
+        self,
+        voice: str,
+        scene_prompt: str,
+        audio_path: str,
+        text_path: str,
+    ) -> Dict[str, Any]:
+        context = self._profile_context.get(voice)
+        if (
+            context
+            and context.get("method") == "clone"
+            and context["scene_prompt"] == scene_prompt
+            and context["audio_path"] == audio_path
+            and context["text_path"] == text_path
+        ):
+            return context
+
+        messages, generation_messages = self.prepare_messages_context(scene_prompt, "")
+
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"Voice prompt audio file not found: {audio_path}")
+        if not os.path.exists(text_path):
+            raise FileNotFoundError(f"Voice prompt text file not found: {text_path}")
+
+        with open(text_path, "r", encoding="utf-8") as f:
+            prompt_text = f.read().strip()
+
+        messages.append(Message(role="user", content=prompt_text))
+        messages.append(Message(role="assistant", content=AudioContent(audio_url=audio_path)))
+
+        prompt_audio_ids = self.engine.audio_tokenizer.encode(audio_path)
+        audio_ids = [prompt_audio_ids.cpu()]
+
+        generated_audio_ids: List[torch.Tensor] = []
+        cached_audio_tokens = db.get_cached_audio_tokens(voice)
+        cached_audio_ids = self._deserialize_audio_ids(cached_audio_tokens)
+        if cached_audio_ids:
+            generated_audio_ids = cached_audio_ids[-self.generation_chunk_buffer_size :]
+            for _ in generated_audio_ids:
+                generation_messages.append(Message(role="user", content=""))
+                generation_messages.append(Message(role="assistant", content=AudioContent(audio_url="")))
+
+        context = {
+            "method": "clone",
+            "scene_prompt": scene_prompt,
+            "audio_path": audio_path,
+            "text_path": text_path,
+            "messages": messages,
+            "generation_messages": generation_messages,
+            "generated_audio_ids": generated_audio_ids,
+            "audio_ids": audio_ids,
+        }
+        self._profile_context[voice] = context
+        return context
 
 
     async def generate_audio_for_sentence(self, text: str, voice: str) -> AsyncGenerator[bytes, None]:
         """Generate audio for text using Higgs streaming"""
 
         voice_config = await db.get_voice(voice)
+        method = (voice_config.method or "").strip().lower()
         scene_prompt = (voice_config.scene_prompt or "").strip()
         speaker_desc = (voice_config.speaker_desc or "").strip()
 
-        context = self._get_profile_context(voice, scene_prompt, speaker_desc)
+        if method == "clone":
+            audio_path = voice_config.audio_path or os.path.join(self.voice_dir, f"{voice}.wav")
+            text_path = voice_config.text_path or os.path.join(self.voice_dir, f"{voice}.txt")
+            context = self._get_clone_context(voice, scene_prompt, audio_path, text_path)
+        else:
+            context = self._get_profile_context(voice, scene_prompt, speaker_desc)
         messages = context["messages"]
         generation_messages = context["generation_messages"]
         generated_audio_ids = context["generated_audio_ids"]
