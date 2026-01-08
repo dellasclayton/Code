@@ -603,7 +603,7 @@ class Speech:
         """Process Sentences - Synthesize Audio"""
         while self.is_running:
             try:
-                sentence = await asyncio.wait_for(self.queues.sentence_queue.get(), timeout=0.1)
+                sentence = await asyncio.wait_for(self.queues.sentence_queue.get(), timeout=0.05)
 
             except asyncio.TimeoutError:
                 continue
@@ -1487,7 +1487,7 @@ class WebSocketManager:
 
         while True:
             try:
-                chunk: AudioChunk = await asyncio.wait_for(self.queues.audio_queue.get(), timeout=0.1)
+                chunk: AudioChunk = await asyncio.wait_for(self.queues.audio_queue.get(), timeout=0.05)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
