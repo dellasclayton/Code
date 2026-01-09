@@ -16,6 +16,24 @@
     0 8px 16px rgba(0, 0, 0, 0.2);
 }
 
+/* WebSocket indicator */
+.ws-indicator {
+  display: flex;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #6b7280; /* gray */
+  margin-right: 10px;
+  margin-left: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.ws-indicator.connected {
+  background: #10b981; /* green */
+  box-shadow: 0 0 0 3px color-mix(in oklab, #10b981 25%, transparent);
+}
+
+
 /* ===== Toolbar Styles ===== */
 .toolbar {
   display: flex;
@@ -248,22 +266,86 @@
 }
 
 .mic-button {
-  background-color: #2a2a2a;
-  border: none;
-  color: #e0e0e0;
-  cursor: pointer;
-  padding: 12px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
   width: 48px;
   height: 48px;
+  border-radius: 9999px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
 
 .mic-button:hover {
-  background-color: #3a3a3a;
+  background-color: rgba(255, 255, 255, 0.102);
+}
+
+/* ============================================
+   MIC BUTTON STATES
+   ============================================ */
+
+.mic-button.listening {
+  box-shadow: 0 0 0 3px color-mix(in oklab, #10b981 35%, transparent),
+  0 0 0 8px color-mix(in oklab, #10b981 12%, transparent);
+  animation: pulseGlowGreen 1.6s ease-in-out infinite;
+}
+
+.mic-button.listening svg {
+  color: #37a3fc;
+}
+
+.mic-button.recording {
+  box-shadow: 0 0 0 3px color-mix(in oklab, #ef4444 35%, transparent),
+  0 0 0 8px color-mix(in oklab, #ef4444 12%, transparent);
+  animation: pulseGlowRed 1.2s ease-in-out infinite;
+}
+
+.mic-button.recording svg {
+  color: white;
+}
+
+.mic-button.paused {
+  background-color: #eab308;
+}
+
+.mic-button.paused svg {
+  color: white;
+}
+
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+}
+
+@keyframes pulseGlowGreen {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, #10b981 35%, transparent),
+      0 0 0 8px color-mix(in oklab, #10b981 12%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, #10b981 55%, transparent),
+      0 0 0 12px color-mix(in oklab, #10b981 18%, transparent);
+  }
+}
+
+@keyframes pulseGlowRed {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, #ef4444 35%, transparent),
+      0 0 0 8px color-mix(in oklab, #ef4444 12%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, #ef4444 55%, transparent),
+      0 0 0 12px color-mix(in oklab, #ef4444 18%, transparent);
+  }
+}
+
+.mic-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .send-button {

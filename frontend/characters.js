@@ -15,11 +15,14 @@ let voices = [];
 let selectedCharacterId = null;
 let currentCharacter = null;
 let isLoading = false;
+let searchQuery = '';
+let modalEventsBound = false;
 
 /**
  * Initialize the characters page
  */
 export async function initCharacters() {
+  searchQuery = '';
   // Create notification container
   createNotificationContainer();
 
@@ -59,8 +62,9 @@ async function loadData() {
       console.log(`✅ Loaded from cache: ${characters.length} characters, ${voices.length} voices`);
     }
 
-    // Render the character list
-    renderCharacterList();
+    // Render the character grid and active list
+    renderCharacterGrid();
+    renderActiveCharacterList();
 
     // Populate voice dropdown if card is open
     populateVoiceDropdown();
@@ -72,7 +76,8 @@ async function loadData() {
     // Render empty state
     characters = [];
     voices = [];
-    renderCharacterList();
+    renderCharacterGrid();
+    renderActiveCharacterList();
   } finally {
     isLoading = false;
     hideLoadingState();
@@ -87,18 +92,22 @@ function setupCacheEventHandlers() {
   characterCache.on('character:created', (character) => {
     console.log('Character created:', character.id);
     characters = characterCache.getAllCharacters();
-    renderCharacterList();
+    renderCharacterGrid();
+    renderActiveCharacterList();
   });
 
   // Character updated
   characterCache.on('character:updated', (character) => {
     console.log('Character updated:', character.id);
     characters = characterCache.getAllCharacters();
-    renderCharacterList();
+    renderCharacterGrid();
+    renderActiveCharacterList();
 
     // If currently viewing this character, reload its data
     if (currentCharacter && currentCharacter.id === character.id) {
+      currentCharacter = character;
       loadCharacterData(character);
+      updateModalChatButtonState();
     }
   });
 
@@ -106,7 +115,12 @@ function setupCacheEventHandlers() {
   characterCache.on('character:deleted', ({ id }) => {
     console.log('Character deleted:', id);
     characters = characterCache.getAllCharacters();
-    renderCharacterList();
+    renderCharacterGrid();
+    renderActiveCharacterList();
+
+    if (currentCharacter && currentCharacter.id === id) {
+      hideCharacterModal();
+    }
   });
 
   // Voice created
@@ -150,9 +164,9 @@ function createNotificationContainer() {
  * Show loading state
  */
 function showLoadingState() {
-  const listContainer = document.getElementById('character-list');
-  if (listContainer) {
-    listContainer.innerHTML = `
+  const gridContainer = document.getElementById('character-grid');
+  if (gridContainer) {
+    gridContainer.innerHTML = `
       <div class="character-list-loading">
         <div class="loading-spinner"></div>
         <p>Loading characters...</p>
@@ -165,7 +179,7 @@ function showLoadingState() {
  * Hide loading state
  */
 function hideLoadingState() {
-  // Loading state will be replaced by renderCharacterList()
+  // Loading state will be replaced by renderCharacterGrid()
 }
 
 /**
@@ -199,7 +213,7 @@ function setupEventListeners() {
   // Add character button
   const addBtn = document.getElementById('add-character-btn');
   if (addBtn) {
-    addBtn.addEventListener('click', () => showCharacterCard(true));
+    addBtn.addEventListener('click', () => showCharacterModal(true));
   }
 
   // Character search
@@ -211,7 +225,26 @@ function setupEventListeners() {
   // Close card button
   const closeBtn = document.getElementById('character-card-close-btn');
   if (closeBtn) {
-    closeBtn.addEventListener('click', () => hideCharacterCard());
+    closeBtn.addEventListener('click', () => hideCharacterModal());
+  }
+
+  // Modal backdrop close
+  const modal = document.getElementById('character-modal');
+  if (modal) {
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) {
+        hideCharacterModal();
+      }
+    });
+  }
+
+  if (!modalEventsBound) {
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        hideCharacterModal();
+      }
+    });
+    modalEventsBound = true;
   }
 
   // Tab buttons
@@ -280,96 +313,232 @@ function setupEventListeners() {
 }
 
 /**
- * Render the character list
+ * Render the character grid
  */
-function renderCharacterList() {
-  const listContainer = document.getElementById('character-list');
+function renderCharacterGrid() {
+  const gridContainer = document.getElementById('character-grid');
 
-  if (!listContainer) {
-    console.warn('Character list container not found');
+  if (!gridContainer) {
+    console.warn('Character grid container not found');
     return;
   }
 
-  // Clear existing list
-  listContainer.innerHTML = '';
+  gridContainer.innerHTML = '';
 
   if (characters.length === 0) {
-    listContainer.innerHTML = `
-      <div class="character-list-empty">
+    gridContainer.innerHTML = `
+      <div class="character-grid-empty">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
         </svg>
-        <p>No characters yet.<br>Click "Add Character" to create one.</p>
+        <p>No characters yet. Click "Add Character" to create one.</p>
       </div>
     `;
     return;
   }
 
-  // Render character items
-  characters.forEach(character => {
-    const item = createCharacterItem(character);
+  const visibleCharacters = getFilteredCharacters();
+
+  if (visibleCharacters.length === 0) {
+    gridContainer.innerHTML = `
+      <div class="character-grid-empty">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+        <p>No matches for your search.</p>
+      </div>
+    `;
+    return;
+  }
+
+  visibleCharacters.forEach(character => {
+    const card = createCharacterCard(character);
+    gridContainer.appendChild(card);
+  });
+}
+
+/**
+ * Render the active character list
+ */
+function renderActiveCharacterList() {
+  const listContainer = document.getElementById('active-character-list');
+  const emptyState = document.getElementById('active-character-empty');
+
+  if (!listContainer) {
+    console.warn('Active character list container not found');
+    return;
+  }
+
+  listContainer.innerHTML = '';
+
+  const activeCharacters = characters.filter(character => character.is_active);
+
+  if (emptyState) {
+    emptyState.style.display = activeCharacters.length === 0 ? 'flex' : 'none';
+  }
+
+  activeCharacters.forEach(character => {
+    const item = createActiveCharacterItem(character);
     listContainer.appendChild(item);
   });
 }
 
 /**
- * Create a character list item element
+ * Create a character card element for the grid
  */
-function createCharacterItem(character) {
-  const item = document.createElement('div');
-  item.className = 'character-item';
+function createCharacterCard(character) {
+  const card = document.createElement('div');
+  card.className = 'character-grid-card';
+  card.dataset.characterId = character.id;
+
   if (character.id === selectedCharacterId) {
-    item.classList.add('active');
+    card.classList.add('selected');
   }
 
-  const avatar = character.image_url
-    ? `<img src="${character.image_url}" alt="${character.name}" />`
-    : `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-       </svg>`;
+  if (character.is_active) {
+    card.classList.add('active');
+  }
 
-  const description = character.system_prompt
-    ? character.system_prompt.substring(0, 40) + '...'
-    : 'No description';
+  const media = document.createElement('div');
+  media.className = 'character-grid-media';
 
-  item.innerHTML = `
-    <div class="character-item-avatar">
-      ${avatar}
-    </div>
-    <div class="character-item-info">
-      <div class="character-item-name">${character.name}</div>
-      <div class="character-item-desc">${description}</div>
-    </div>
-  `;
+  if (character.image_url) {
+    const img = document.createElement('img');
+    img.src = character.image_url;
+    img.alt = character.name || 'Character image';
+    img.className = 'character-grid-image';
+    media.appendChild(img);
+  } else {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'character-grid-placeholder';
+    placeholder.textContent = getCharacterInitials(character.name);
+    media.appendChild(placeholder);
+  }
 
-  item.addEventListener('click', () => selectCharacter(character.id));
+  const footer = document.createElement('div');
+  footer.className = 'character-grid-footer';
+
+  const nameWrap = document.createElement('div');
+  nameWrap.className = 'character-grid-name';
+
+  const statusDot = document.createElement('span');
+  statusDot.className = 'character-status-indicator';
+
+  const name = document.createElement('span');
+  name.className = 'character-name-text';
+  name.textContent = character.name || 'Unnamed';
+
+  nameWrap.append(statusDot, name);
+
+  const chatBtn = document.createElement('button');
+  chatBtn.type = 'button';
+  chatBtn.className = 'character-grid-chat-btn';
+  chatBtn.textContent = 'Chat';
+  chatBtn.dataset.defaultLabel = 'Chat';
+  chatBtn.setAttribute('aria-pressed', character.is_active ? 'true' : 'false');
+
+  if (character.is_active) {
+    chatBtn.classList.add('active');
+  }
+
+  chatBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    updateCharacterActiveState(character.id, !character.is_active, chatBtn);
+  });
+
+  footer.append(nameWrap, chatBtn);
+  card.append(media, footer);
+
+  card.addEventListener('click', () => openCharacterModal(character.id));
+
+  return card;
+}
+
+/**
+ * Create an active character list item
+ */
+function createActiveCharacterItem(character) {
+  const item = document.createElement('div');
+  item.className = 'active-character-item';
+  item.dataset.characterId = character.id;
+
+  const thumb = document.createElement('div');
+  thumb.className = 'active-character-thumb';
+
+  if (character.image_url) {
+    const img = document.createElement('img');
+    img.src = character.image_url;
+    img.alt = character.name || 'Character image';
+    thumb.appendChild(img);
+  } else {
+    const placeholder = document.createElement('span');
+    placeholder.textContent = getCharacterInitials(character.name);
+    thumb.appendChild(placeholder);
+  }
+
+  const info = document.createElement('div');
+  info.className = 'active-character-info';
+
+  const name = document.createElement('div');
+  name.className = 'active-character-name';
+  name.textContent = character.name || 'Unnamed';
+
+  const status = document.createElement('div');
+  status.className = 'active-character-status';
+  status.textContent = 'Active';
+
+  info.append(name, status);
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'active-character-remove';
+  removeBtn.textContent = 'Remove';
+  removeBtn.dataset.defaultLabel = 'Remove';
+  removeBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    updateCharacterActiveState(character.id, false, removeBtn);
+  });
+
+  item.append(thumb, info, removeBtn);
+  item.addEventListener('click', () => openCharacterModal(character.id));
 
   return item;
+}
+
+function getFilteredCharacters() {
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [...characters];
+  }
+
+  return characters.filter(character => {
+    const name = (character.name || '').toLowerCase();
+    const prompt = (character.system_prompt || '').toLowerCase();
+    return name.includes(normalizedQuery) || prompt.includes(normalizedQuery);
+  });
+}
+
+function getCharacterInitials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  const first = parts[0][0] || '';
+  const second = parts.length > 1 ? parts[1][0] : (parts[0][1] || '');
+  return (first + second).toUpperCase();
 }
 
 /**
  * Filter characters based on search query
  */
 function filterCharacters(query) {
-  const items = document.querySelectorAll('.character-item');
-  const lowerQuery = query.toLowerCase();
-
-  items.forEach(item => {
-    const name = item.querySelector('.character-item-name').textContent.toLowerCase();
-    const desc = item.querySelector('.character-item-desc').textContent.toLowerCase();
-
-    if (name.includes(lowerQuery) || desc.includes(lowerQuery)) {
-      item.style.display = 'flex';
-    } else {
-      item.style.display = 'none';
-    }
-  });
+  searchQuery = query;
+  renderCharacterGrid();
 }
 
 /**
- * Select a character and show their card
+ * Select a character and show their modal
  */
-function selectCharacter(characterId) {
+function openCharacterModal(characterId) {
   selectedCharacterId = characterId;
   currentCharacter = characters.find(c => c.id === characterId);
 
@@ -378,51 +547,40 @@ function selectCharacter(characterId) {
     return;
   }
 
-  // Update active state in list
-  document.querySelectorAll('.character-item').forEach(item => {
-    item.classList.remove('active');
-  });
-
-  event.currentTarget?.classList.add('active');
+  renderCharacterGrid();
 
   const card = document.getElementById('character-card');
-  const isCardVisible = card?.classList.contains('show');
+  const modal = document.getElementById('character-modal');
+  const isModalVisible = modal?.classList.contains('show');
 
-  // If card is already visible, animate the transition
-  if (isCardVisible) {
-    // Add switching class for animation
+  if (isModalVisible && card) {
     card.classList.add('switching');
 
     setTimeout(() => {
-      // Load new character data
       loadCharacterData(currentCharacter);
-
-      // Remove switching class to fade back in
+      updateModalChatButtonState();
       card.classList.remove('switching');
     }, 150);
   } else {
-    // Load character data into card
     loadCharacterData(currentCharacter);
-
-    // Show the character card
-    showCharacterCard();
+    updateModalChatButtonState();
+    showCharacterModal();
   }
 }
 
 /**
- * Show the character card
+ * Show the character modal
  */
-function showCharacterCard(isNew = false) {
+function showCharacterModal(isNew = false) {
+  const modal = document.getElementById('character-modal');
   const card = document.getElementById('character-card');
-  const welcome = document.getElementById('character-welcome');
 
-  if (!card || !welcome) {
-    console.warn('Character card or welcome element not found');
+  if (!modal || !card) {
+    console.warn('Character modal not found');
     return;
   }
 
   if (isNew || !currentCharacter) {
-    // Create a new blank character
     currentCharacter = {
       id: null,
       name: 'Character name',
@@ -439,44 +597,52 @@ function showCharacterCard(isNew = false) {
         text_path: ''
       }
     };
+    selectedCharacterId = null;
+    renderCharacterGrid();
     loadCharacterData(currentCharacter);
   }
 
-  // Hide welcome message and show card with animation
-  welcome.classList.add('hidden');
-
-  // Small delay to ensure smooth transition
-  setTimeout(() => {
-    card.classList.add('show');
-  }, 50);
+  updateModalChatButtonState();
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
 }
 
 /**
- * Hide the character card
+ * Hide the character modal
  */
-function hideCharacterCard() {
-  const card = document.getElementById('character-card');
-  const welcome = document.getElementById('character-welcome');
-
-  if (!card || !welcome) {
+function hideCharacterModal() {
+  const modal = document.getElementById('character-modal');
+  if (!modal) {
     return;
   }
 
-  // Hide card and show welcome message
-  card.classList.remove('show');
+  modal.classList.remove('show');
+  modal.setAttribute('aria-hidden', 'true');
 
-  setTimeout(() => {
-    welcome.classList.remove('hidden');
-  }, 300);
-
-  // Reset current character and selection
   currentCharacter = null;
   selectedCharacterId = null;
+  renderCharacterGrid();
+}
 
-  // Update active state in list
-  document.querySelectorAll('.character-item').forEach(item => {
-    item.classList.remove('active');
-  });
+function updateModalChatButtonState() {
+  const chatBtn = document.getElementById('chat-character-btn');
+  if (!chatBtn) return;
+
+  if (!currentCharacter || !currentCharacter.id) {
+    chatBtn.textContent = 'Chat';
+    chatBtn.classList.remove('active');
+    chatBtn.disabled = true;
+    return;
+  }
+
+  chatBtn.disabled = false;
+  if (currentCharacter.is_active) {
+    chatBtn.textContent = 'Remove from Chat';
+    chatBtn.classList.add('active');
+  } else {
+    chatBtn.textContent = 'Chat';
+    chatBtn.classList.remove('active');
+  }
 }
 
 /**
@@ -542,6 +708,8 @@ function loadCharacterData(character) {
   if (voiceSelect) {
     voiceSelect.value = character.voice || '';
   }
+
+  updateModalChatButtonState();
 
   // Voice tab data
   /*
@@ -852,7 +1020,8 @@ async function saveCharacter() {
     characters = characterCache.getAllCharacters();
 
     // Re-render the character list (UI already updated optimistically, but refresh to be sure)
-    renderCharacterList();
+    renderCharacterGrid();
+    renderActiveCharacterList();
 
     // Show success notification
     showNotification(
@@ -862,7 +1031,7 @@ async function saveCharacter() {
     );
 
     // Close the card after saving
-    hideCharacterCard();
+    hideCharacterModal();
   } catch (error) {
     console.error('Error saving character:', error);
     const errorMessage = handleDbError(error);
@@ -913,7 +1082,8 @@ async function deleteCharacter() {
     characters = characterCache.getAllCharacters();
 
     // Re-render the character list (UI already updated optimistically)
-    renderCharacterList();
+    renderCharacterGrid();
+    renderActiveCharacterList();
 
     // Show success notification
     showNotification(
@@ -923,7 +1093,7 @@ async function deleteCharacter() {
     );
 
     // Hide the card
-    hideCharacterCard();
+    hideCharacterModal();
   } catch (error) {
     console.error('Error deleting character:', error);
     const errorMessage = handleDbError(error);
@@ -942,7 +1112,7 @@ async function deleteCharacter() {
 }
 
 /**
- * Handle chat button click - activate character and navigate to chat
+ * Handle chat button click - toggle active state
  */
 async function handleChatWithCharacter() {
   if (!currentCharacter || !currentCharacter.id) {
@@ -951,60 +1121,53 @@ async function handleChatWithCharacter() {
   }
 
   const chatBtn = document.getElementById('chat-character-btn');
-  if (chatBtn) {
-    chatBtn.disabled = true;
-    chatBtn.textContent = 'Activating...';
+  await updateCharacterActiveState(currentCharacter.id, !currentCharacter.is_active, chatBtn);
+}
+
+async function updateCharacterActiveState(characterId, isActive, buttonEl) {
+  const character = characters.find(c => c.id === characterId);
+  if (!character) {
+    console.error('Character not found:', characterId);
+    return;
+  }
+  const characterName = character.name || 'Character';
+
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.classList.add('loading');
+    if (buttonEl.id !== 'chat-character-btn') {
+      buttonEl.textContent = isActive ? 'Adding...' : 'Removing...';
+    }
   }
 
   try {
-    // Update character to set is_active = true
-    await characterCache.updateCharacter(currentCharacter.id, {
-      is_active: true
-    });
+    await characterCache.updateCharacter(characterId, { is_active: isActive });
 
-    console.log(`✅ Character ${currentCharacter.name} activated for chat`);
-
-    // Send WebSocket message to refresh active characters on server
-    // Note: WebSocket might not be connected if we're on the characters page
     if (websocket.isConnected()) {
       websocket.refreshActiveCharacters();
-      console.log('✅ Sent refresh signal to server');
-    } else {
-      console.log('⚠️ WebSocket not connected, server will load on next connection');
     }
 
-    // Update local state
-    currentCharacter.is_active = true;
-    const characterIndex = characters.findIndex(c => c.id === currentCharacter.id);
-    if (characterIndex !== -1) {
-      characters[characterIndex].is_active = true;
+    if (currentCharacter && currentCharacter.id === characterId) {
+      currentCharacter.is_active = isActive;
+      updateModalChatButtonState();
     }
 
-    // Show success notification
     showNotification(
-      'Character Activated',
-      `${currentCharacter.name} is now active for chat`,
+      isActive ? 'Character Activated' : 'Character Removed',
+      `${characterName} ${isActive ? 'is now active for chat' : 'was removed from chat'}`,
       'success'
     );
-
-    // Navigate to chat page after a short delay
-    setTimeout(() => {
-      // Find the home nav link and trigger click
-      const homeLink = document.querySelector('.nav-link[href="#home"]');
-      if (homeLink) {
-        homeLink.click();
-      }
-    }, 1000);
-
   } catch (error) {
-    console.error('Error activating character:', error);
+    console.error('Error updating character state:', error);
     const errorMessage = handleDbError(error);
-    showNotification('Error Activating Character', errorMessage, 'error');
+    showNotification('Error Updating Character', errorMessage, 'error');
   } finally {
-    // Re-enable button
-    if (chatBtn) {
-      chatBtn.disabled = false;
-      chatBtn.textContent = 'Chat';
+    if (buttonEl && buttonEl.isConnected) {
+      buttonEl.disabled = false;
+      buttonEl.classList.remove('loading');
+      if (buttonEl.dataset.defaultLabel) {
+        buttonEl.textContent = buttonEl.dataset.defaultLabel;
+      }
     }
   }
 }
