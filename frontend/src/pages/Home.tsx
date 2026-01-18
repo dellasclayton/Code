@@ -6,8 +6,6 @@ import {
   AlignRight,
   Bold,
   ChevronDown,
-  ChevronsLeft,
-  ChevronsRight,
   Code,
   Highlighter,
   Italic,
@@ -21,6 +19,8 @@ import {
   Undo2,
 } from 'lucide-react'
 
+import arrowLeft from '@/assets/arrow-left.png'
+import arrowRight from '@/assets/arrow-right.png'
 import { cn } from '@/lib/utils'
 
 type ToolbarButtonProps = {
@@ -54,13 +54,14 @@ function HomePage() {
   return (
     <div className="relative flex h-full w-full overflow-hidden">
       <div
-        className="pointer-events-none absolute inset-y-6 left-0 z-10 flex"
+        className="pointer-events-none absolute inset-y-0 left-0 z-10 flex"
         style={{ width: leftDrawerWidth }}
       >
         <div
           className={cn(
             'pointer-events-auto h-full w-full rounded-2xl border border-[#2d3138] bg-[#191c21]',
-            'shadow-[0_20px_45px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-out'
+            leftOpen && 'shadow-[0_20px_45px_rgba(0,0,0,0.4)]',
+            'transition-transform duration-300 ease-out'
           )}
           style={{
             transform: `translateX(${leftOpen ? 0 : -leftDrawerWidth}px)`,
@@ -78,14 +79,16 @@ function HomePage() {
           type="button"
           aria-label={leftOpen ? 'Collapse left drawer' : 'Expand left drawer'}
           onClick={() => setLeftOpen((value) => !value)}
-          className="pointer-events-auto absolute left-0 top-1/2 z-20 text-[#6c737c] transition-colors hover:text-[#d6dde5]"
+          className="pointer-events-auto absolute left-0 top-1/2 z-20 transition-transform duration-300 ease-out"
           style={{
             transform: `translate(${leftOpen ? leftDrawerWidth : 0}px, -50%)`,
           }}
         >
-          <ChevronsRight
+          <img
+            src={arrowRight}
+            alt=""
             className={cn(
-              'h-5 w-5 transition-transform duration-300 ease-out',
+              'h-8 w-8 transition-transform duration-300 ease-out',
               leftOpen && 'rotate-180'
             )}
           />
@@ -95,13 +98,14 @@ function HomePage() {
       <div className="flex-1" />
 
       <div
-        className="pointer-events-none absolute inset-y-6 right-0 z-10 flex justify-end"
+        className="pointer-events-none absolute inset-y-0 right-0 z-10 flex justify-end"
         style={{ width: rightDrawerWidth }}
       >
         <div
           className={cn(
             'pointer-events-auto h-full w-full rounded-2xl border border-[#2d3138] bg-[#191c21]',
-            'shadow-[0_20px_45px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-out'
+            rightOpen && 'shadow-[0_20px_45px_rgba(0,0,0,0.4)]',
+            'transition-transform duration-300 ease-out'
           )}
           style={{
             transform: `translateX(${rightOpen ? 0 : rightDrawerWidth}px)`,
@@ -121,14 +125,16 @@ function HomePage() {
           type="button"
           aria-label={rightOpen ? 'Collapse right drawer' : 'Expand right drawer'}
           onClick={() => setRightOpen((value) => !value)}
-          className="pointer-events-auto absolute right-0 top-1/2 z-20 text-[#6c737c] transition-colors hover:text-[#d6dde5]"
+          className="pointer-events-auto absolute right-0 top-1/2 z-20 transition-transform duration-300 ease-out"
           style={{
             transform: `translate(${rightOpen ? -rightDrawerWidth : 0}px, -50%)`,
           }}
         >
-          <ChevronsLeft
+          <img
+            src={arrowLeft}
+            alt=""
             className={cn(
-              'h-5 w-5 transition-transform duration-300 ease-out',
+              'h-8 w-8 transition-transform duration-300 ease-out',
               rightOpen && 'rotate-180'
             )}
           />
