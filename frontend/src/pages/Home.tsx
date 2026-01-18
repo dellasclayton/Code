@@ -1,10 +1,13 @@
 import type { ComponentType, ReactNode } from 'react'
+import { useState } from 'react'
 import {
   AlignCenter,
   AlignLeft,
   AlignRight,
   Bold,
   ChevronDown,
+  ChevronsLeft,
+  ChevronsRight,
   Code,
   Highlighter,
   Italic,
@@ -43,9 +46,94 @@ function ToolbarButton({ label, icon: Icon, children }: ToolbarButtonProps) {
 }
 
 function HomePage() {
+  const [leftOpen, setLeftOpen] = useState(false)
+  const [rightOpen, setRightOpen] = useState(false)
+  const leftDrawerWidth = 320
+  const rightDrawerWidth = 320
+
   return (
-    <div className="relative flex h-full w-full">
+    <div className="relative flex h-full w-full overflow-hidden">
+      <div
+        className="pointer-events-none absolute inset-y-6 left-0 z-10 flex"
+        style={{ width: leftDrawerWidth }}
+      >
+        <div
+          className={cn(
+            'pointer-events-auto h-full w-full rounded-2xl border border-[#2d3138] bg-[#191c21]',
+            'shadow-[0_20px_45px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-out'
+          )}
+          style={{
+            transform: `translateX(${leftOpen ? 0 : -leftDrawerWidth}px)`,
+          }}
+        >
+          <div className="flex h-full flex-col gap-4 p-6 text-sm text-[#cbd1d8]">
+            <div className="text-base font-semibold text-white">Info Panel</div>
+            <div className="h-px w-full bg-[#2a2f36]" />
+            <div className="text-xs text-[#9aa2ab]">
+              Placeholder content for the left drawer.
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          aria-label={leftOpen ? 'Collapse left drawer' : 'Expand left drawer'}
+          onClick={() => setLeftOpen((value) => !value)}
+          className="pointer-events-auto absolute left-0 top-1/2 z-20 text-[#6c737c] transition-colors hover:text-[#d6dde5]"
+          style={{
+            transform: `translate(${leftOpen ? leftDrawerWidth : 0}px, -50%)`,
+          }}
+        >
+          <ChevronsRight
+            className={cn(
+              'h-5 w-5 transition-transform duration-300 ease-out',
+              leftOpen && 'rotate-180'
+            )}
+          />
+        </button>
+      </div>
+
       <div className="flex-1" />
+
+      <div
+        className="pointer-events-none absolute inset-y-6 right-0 z-10 flex justify-end"
+        style={{ width: rightDrawerWidth }}
+      >
+        <div
+          className={cn(
+            'pointer-events-auto h-full w-full rounded-2xl border border-[#2d3138] bg-[#191c21]',
+            'shadow-[0_20px_45px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-out'
+          )}
+          style={{
+            transform: `translateX(${rightOpen ? 0 : rightDrawerWidth}px)`,
+          }}
+        >
+          <div className="flex h-full flex-col gap-4 p-6 text-sm text-[#cbd1d8]">
+            <div className="text-base font-semibold text-white">
+              Model Settings
+            </div>
+            <div className="h-px w-full bg-[#2a2f36]" />
+            <div className="text-xs text-[#9aa2ab]">
+              Placeholder content for the right drawer.
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          aria-label={rightOpen ? 'Collapse right drawer' : 'Expand right drawer'}
+          onClick={() => setRightOpen((value) => !value)}
+          className="pointer-events-auto absolute right-0 top-1/2 z-20 text-[#6c737c] transition-colors hover:text-[#d6dde5]"
+          style={{
+            transform: `translate(${rightOpen ? -rightDrawerWidth : 0}px, -50%)`,
+          }}
+        >
+          <ChevronsLeft
+            className={cn(
+              'h-5 w-5 transition-transform duration-300 ease-out',
+              rightOpen && 'rotate-180'
+            )}
+          />
+        </button>
+      </div>
 
       <div className="absolute bottom-6 left-1/2 w-[min(780px,92%)] -translate-x-1/2">
         <div className="overflow-hidden rounded-2xl border border-[#333] bg-[#1b1e23] shadow-[0_20px_50px_rgba(0,0,0,0.55)]">
