@@ -1,6 +1,6 @@
 # AGENTS.md
 ## Project Overview
-Low-latency voice chat application with a FastAPI (Python) backend and vanilla JavaScript frontend. Single-user application — do not over-engineer for enterprise scale or multi-tenancy.
+Low-latency voice chat application with a FastAPI (Python) backend and JavaScript (React TypeScript) frontend. Single-user application — do not over-engineer for enterprise scale or multi-tenancy.
 
 ## Principles/Style
 - Adhere to KISS, YAGNI principles.
