@@ -1,7 +1,7 @@
-import PagePlaceholder from '@/components/PagePlaceholder'
+import VoiceDirectory from '@/components/speech/VoiceDirectory'
 
 function SpeechPage() {
-  return <PagePlaceholder title="Speech" />
+  return <VoiceDirectory />
 }
 
 export default SpeechPage
