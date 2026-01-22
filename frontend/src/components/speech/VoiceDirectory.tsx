@@ -15,6 +15,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
+import VoiceBuilderForm from '@/components/speech/VoiceBuilderForm'
 
 type Voice = {
   id: string
@@ -141,8 +142,8 @@ function VoiceDirectory() {
 
   return (
     <div className="flex h-full w-full flex-col p-8">
-      <div className="flex min-h-0 flex-1 gap-6">
-        <div className="flex w-full max-w-3xl flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-6 xl:flex-row">
+        <div className="flex w-full flex-1 flex-col xl:w-[600px] xl:flex-none">
           <div
             className={cn(
               'flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#2d3138] bg-[#171a1f]/85',
@@ -282,7 +283,9 @@ function VoiceDirectory() {
             </div>
           </div>
         </div>
-        <div className="hidden xl:block flex-1" />
+        <div className="flex w-full flex-1 flex-col">
+          <VoiceBuilderForm />
+        </div>
       </div>
     </div>
   )
