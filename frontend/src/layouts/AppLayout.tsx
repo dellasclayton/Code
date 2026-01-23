@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 
 import Sidebar from '@/components/layout/Sidebar'
@@ -6,6 +6,16 @@ import { cn } from '@/lib/utils'
 
 function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.style.setProperty(
+      '--app-sidebar-width',
+      collapsed ? '75px' : '220px'
+    )
+    root.style.setProperty('--app-layout-gap', '12px')
+  }, [collapsed])
+
   return (
     <div className="dark min-h-screen bg-[#191b1f] text-[#e2e6ea]">
       <div className="flex h-screen gap-3 p-3">

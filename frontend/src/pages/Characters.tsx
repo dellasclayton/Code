@@ -1,6 +1,6 @@
 import type { ChangeEvent } from 'react'
 import { useEffect, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, Search } from 'lucide-react'
 
 import CharacterCard from '@/components/characters/CharacterCard'
 import CharacterModal from '@/components/characters/CharacterModal'
@@ -9,6 +9,7 @@ import type {
   CharacterDraft,
 } from '@/components/characters/types'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 
@@ -72,6 +73,7 @@ function CharactersPage() {
   const [characters, setCharacters] = useState<Character[]>([])
   const [dialogOpen, setDialogOpen] = useState(false)
   const [draft, setDraft] = useState<CharacterDraft>({ ...emptyDraft })
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     setCharacters(readCharacters())
@@ -149,28 +151,45 @@ function CharactersPage() {
     setDialogOpen(false)
   }
 
+  const normalizedQuery = searchQuery.trim().toLowerCase()
+  const visibleCharacters =
+    normalizedQuery.length === 0
+      ? characters
+      : characters.filter((character) =>
+          character.name.toLowerCase().includes(normalizedQuery)
+        )
+
   return (
-    <div className="flex h-full w-full flex-col gap-6 overflow-hidden p-6 lg:flex-row">
-      <div className="flex w-full flex-col gap-6 lg:w-[30%] lg:min-w-[220px] lg:max-w-[320px]">
-        <div className="rounded-2xl border border-[#2d3138] bg-[#171a1f] p-5 shadow-[0_20px_45px_rgba(0,0,0,0.35)]">
-          <Button
-            type="button"
-            onClick={handleNewCharacter}
-            className={cn(
-              'w-full justify-center gap-2 rounded-xl bg-[#0f7cc4] text-white shadow-[0_12px_30px_rgba(15,124,196,0.35)]',
-              'hover:bg-[#1692df]'
-            )}
-          >
-            <Plus className="h-4 w-4" />
-            New Character
-          </Button>
+    <div className="flex h-full w-full flex-col gap-6 overflow-hidden p-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[220px] flex-1 sm:max-w-[420px]">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7e8791]" />
+          <Input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search characters"
+            type="text"
+            className="h-9 rounded-lg border-[#2f353d] bg-[#22252a] pl-9 text-sm text-[#d5d9de] placeholder:text-[#6c7480] focus-visible:border-[#3d4652] focus-visible:ring-0"
+          />
         </div>
+        <Button
+          type="button"
+          size="sm"
+          onClick={handleNewCharacter}
+          className={cn(
+            'h-9 shrink-0 justify-center gap-2 rounded-lg bg-[#0f7cc4] px-4 text-sm text-white shadow-none',
+            'hover:bg-[#1692df]'
+          )}
+        >
+          <Plus className="h-4 w-4" />
+          New Character
+        </Button>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <ScrollArea className="flex-1 min-h-0">
-          <div className="grid grid-cols-2 gap-4 p-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {characters.map((character) => (
+          <div className="flex flex-wrap items-start gap-3 p-1">
+            {visibleCharacters.map((character) => (
               <CharacterCard
                 key={character.id}
                 character={character}

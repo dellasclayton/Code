@@ -75,9 +75,9 @@ function CharacterModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+        <DialogContent
         className={cn(
-          'flex min-h-0 flex-col h-[min(900px,92vh)] w-[min(1400px,96vw)] max-w-[min(1400px,96vw)] sm:max-w-[min(1400px,96vw)] overflow-hidden border-[#2d3138] bg-[#1b1e23] p-0 text-[#e3e7ec]',
+          'flex min-h-0 flex-col h-[min(900px,92vh)] w-[min(1400px,96vw)] max-w-[min(1400px,96vw)] sm:max-w-[min(1400px,96vw)] lg:left-[calc(50%+((var(--app-sidebar-width,220px)+var(--app-layout-gap,12px))/2))] overflow-hidden border-[#2d3138] bg-[#1b1e23] p-0 text-[#e3e7ec]',
           'shadow-[0_30px_90px_rgba(0,0,0,0.6)]'
         )}
       >

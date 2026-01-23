@@ -30,7 +30,7 @@ function CharacterCard({ character, onOpen }: CharacterCardProps) {
       onClick={() => onOpen(character)}
       onKeyDown={handleKeyDown}
       className={cn(
-        'group relative overflow-hidden rounded-3xl border-6 border-[#050607] bg-[#111316] text-left',
+        'group relative w-[180px] flex-none overflow-hidden rounded-3xl border-6 border-[#050607] bg-[#111316] text-left',
         'shadow-[0_18px_40px_rgba(0,0,0,0.35)] transition-all duration-300',
         'hover:border-[#111111] hover:shadow-[0_18px_40px_rgba(0,0,0,0.35),0_0_0_2px_rgba(96,165,250,0.22)]'
       )}
