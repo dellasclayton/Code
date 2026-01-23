@@ -14,9 +14,6 @@ Low-latency voice chat application with a FastAPI (Python) backend and JavaScrip
   - Producer/consumer with `asyncio.Queue`
   - `asyncio.as_completed()` when processing results as they arrive
 
-**JavaScript** (vanilla)
-  Functional programming preferred. Avoid classes and OOP patterns; use pure functions and closures.
-  ES Modules: Keep imports/exports simple and flat. Avoid circular dependencies or complex re-exports that break loading.
 
 ### Key Libraries
 - RealtimeSTT (faster-whisper) — speech-to-text
@@ -24,6 +21,7 @@ Low-latency voice chat application with a FastAPI (Python) backend and JavaScrip
 - SQLite — database
 - FastAPI — backend server
 - stream2sentence — sentence boundary detection
+- shadcn ui
 
 ## Code Organization
 Code
