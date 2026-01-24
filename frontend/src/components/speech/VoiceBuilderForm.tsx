@@ -1,3 +1,6 @@
+import { type FormEvent } from 'react'
+
+import { type Voice, type VoiceMethod } from '@/components/speech/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -6,7 +9,24 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
-function VoiceBuilderForm() {
+type VoiceBuilderFormProps = {
+  voice: Voice
+  onChange: (updates: Partial<Voice>) => void
+  onSave?: () => void
+  onDelete?: () => void
+}
+
+const methodOptions: { value: VoiceMethod; title: string }[] = [
+  { value: 'clone', title: 'Clone' },
+  { value: 'profile', title: 'Profile' },
+]
+
+function VoiceBuilderForm({
+  voice,
+  onChange,
+  onSave,
+  onDelete,
+}: VoiceBuilderFormProps) {
   const inputClassName = cn(
     'h-10 border-[#2d3138] bg-[#171a1f] text-sm text-[#dfe3e8]',
     'placeholder:text-[#6c7480] focus-visible:border-[#3a414b] focus-visible:ring-[#2c323a]'
@@ -19,6 +39,17 @@ function VoiceBuilderForm() {
 
   const labelClassName = 'text-sm font-medium text-[#cbd2da]'
 
+  const handleMethodChange = (value: string) => {
+    if (value === 'clone' || value === 'profile') {
+      onChange({ method: value })
+    }
+  }
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    onSave?.()
+  }
+
   return (
     <div
       className={cn(
@@ -26,10 +57,7 @@ function VoiceBuilderForm() {
         'shadow-[0_20px_40px_rgba(0,0,0,0.35)]'
       )}
     >
-      <form
-        className="flex min-h-0 flex-1 flex-col"
-        onSubmit={(event) => event.preventDefault()}
-      >
+      <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
         <ScrollArea className="flex-1">
           <div className="space-y-4 px-5 py-4">
             <div className="space-y-2">
@@ -39,6 +67,8 @@ function VoiceBuilderForm() {
               <Input
                 id="voice-name"
                 placeholder="Enter voice name"
+                value={voice.name}
+                onChange={(event) => onChange({ name: event.target.value })}
                 className={inputClassName}
               />
             </div>
@@ -46,19 +76,11 @@ function VoiceBuilderForm() {
             <div className="space-y-3">
               <Label className={labelClassName}>Method</Label>
               <RadioGroup
-                defaultValue="clone"
+                value={voice.method}
+                onValueChange={handleMethodChange}
                 className="grid gap-3 sm:grid-cols-2"
               >
-                {[
-                  {
-                    value: 'clone',
-                    title: 'Clone',
-                  },
-                  {
-                    value: 'profile',
-                    title: 'Profile',
-                  },
-                ].map((option) => (
+                {methodOptions.map((option) => (
                   <Label
                     key={option.value}
                     className={cn(
@@ -89,6 +111,10 @@ function VoiceBuilderForm() {
               <Textarea
                 id="scene-prompt"
                 placeholder="Enter scene prompt"
+                value={voice.scenePrompt}
+                onChange={(event) =>
+                  onChange({ scenePrompt: event.target.value })
+                }
                 className={textareaClassName}
               />
             </div>
@@ -101,6 +127,10 @@ function VoiceBuilderForm() {
                 <Input
                   id="reference-text"
                   placeholder="Enter reference text path"
+                  value={voice.referenceText}
+                  onChange={(event) =>
+                    onChange({ referenceText: event.target.value })
+                  }
                   className={inputClassName}
                 />
               </div>
@@ -111,6 +141,10 @@ function VoiceBuilderForm() {
                 <Input
                   id="reference-audio"
                   placeholder="Enter reference audio path"
+                  value={voice.referenceAudio}
+                  onChange={(event) =>
+                    onChange({ referenceAudio: event.target.value })
+                  }
                   className={inputClassName}
                 />
               </div>
@@ -123,6 +157,10 @@ function VoiceBuilderForm() {
               <Textarea
                 id="speaker-description"
                 placeholder="Enter speaker description"
+                value={voice.speakerDescription}
+                onChange={(event) =>
+                  onChange({ speakerDescription: event.target.value })
+                }
                 className={textareaClassName}
               />
             </div>
@@ -134,6 +172,7 @@ function VoiceBuilderForm() {
             <Button
               type="submit"
               className="bg-[#007acc] text-white shadow-[0_8px_18px_rgba(0,122,204,0.35)] hover:bg-[#1087d9]"
+              disabled={!onSave}
             >
               Save
             </Button>
@@ -144,6 +183,8 @@ function VoiceBuilderForm() {
                 'border-[#3a2a2a] bg-[#1f1416] text-[#ff8f8f]',
                 'hover:border-[#553333] hover:bg-[#2a1618] hover:text-[#ffd2d2]'
               )}
+              onClick={onDelete}
+              disabled={!onDelete}
             >
               Delete
             </Button>
