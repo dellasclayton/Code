@@ -223,6 +223,13 @@ function CharactersPage() {
     setActiveDraft(null)
   }
 
+  const handleChat = () => {}
+
+  const handleClose = () => {
+    setSelectedId(null)
+    setActiveDraft(null)
+  }
+
   const editorAnimationClass = cn(
     transitionState === 'enter'
       ? 'editor-fade-in'
@@ -249,7 +256,9 @@ function CharactersPage() {
               <CharacterEditor
                 key={displayedCharacter.id}
                 character={displayedCharacter}
+                onChat={handleChat}
                 onChange={handleDraftChange}
+                onClose={handleClose}
                 onDelete={handleDelete}
                 onSave={handleSave}
               />
