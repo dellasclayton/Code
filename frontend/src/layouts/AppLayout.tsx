@@ -33,7 +33,6 @@ function AppLayout() {
             <div
               className={cn(
                 'relative h-full w-full rounded-2xl border border-[#242830] bg-[#1c1e22]',
-                'bg-[radial-gradient(1200px_circle_at_top,_#22262c_0%,_#1c1e22_40%,_#191b1f_100%)]'
               )}
             >
             <Outlet />
