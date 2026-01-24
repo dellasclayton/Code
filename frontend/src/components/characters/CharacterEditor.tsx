@@ -73,7 +73,7 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
   }
 
   return (
-    <div className="flex h-full w-full flex-col rounded-2xl border border-[#2b3139] bg-[#171a1f]/85 p-6 shadow-[0_20px_40px_rgba(0,0,0,0.35)]">
+    <div className="flex h-full w-full flex-col rounded-2xl border border-[#2b3139] bg-[#171a1f]/75 p-6 shadow-[0_20px_40px_rgba(0,0,0,0.35)]">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Avatar className="h-9 w-9 border border-[#2b3139] bg-[#121418]">

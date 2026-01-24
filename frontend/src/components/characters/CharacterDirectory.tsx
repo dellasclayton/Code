@@ -148,7 +148,7 @@ function CharacterDirectory() {
     <div className="flex h-full w-full min-h-0 flex-col">
       <div
         className={cn(
-          'flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#2d3138] bg-[#171a1f]/85',
+          'flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#2d3138] bg-[#171a1f]/75',
           'shadow-[0_20px_40px_rgba(0,0,0,0.35)]'
         )}
       >
