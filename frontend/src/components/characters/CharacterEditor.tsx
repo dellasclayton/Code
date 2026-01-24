@@ -1,5 +1,6 @@
-import { useEffect, useState, type ChangeEvent } from 'react'
+import { type ChangeEvent } from 'react'
 
+import { type Character } from '@/components/characters/types'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,16 +22,22 @@ type VoiceOption = {
 }
 
 type CharacterEditorProps = {
+  character: Character
   voiceOptions?: VoiceOption[]
+  onChange: (updates: Partial<Character>) => void
+  onDelete?: () => void
+  onSave?: () => void
 }
 
-function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
-  const [characterName, setCharacterName] = useState('')
-  const [selectedVoice, setSelectedVoice] = useState<string | undefined>()
-  const [mainImageUrl, setMainImageUrl] = useState<string | null>(null)
-
-  const displayName = characterName.trim() || 'Character Name'
-  const isPlaceholderName = !characterName.trim()
+function CharacterEditor({
+  character,
+  voiceOptions = [],
+  onChange,
+  onDelete,
+  onSave,
+}: CharacterEditorProps) {
+  const displayName = character.name.trim() || 'Character Name'
+  const isPlaceholderName = !character.name.trim()
   const inputClassName = cn(
     'h-10 border-[#2d3138] bg-[#171a1f] text-sm text-[#dfe3e8] shadow-none',
     'placeholder:text-[#6c7480] focus-visible:border-[#3a414b] focus-visible:ring-[#2c323a]'
@@ -42,34 +49,21 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
   )
   const labelClassName = 'text-sm font-medium text-[#cbd2da]'
 
-  useEffect(() => {
-    return () => {
-      if (mainImageUrl) {
-        URL.revokeObjectURL(mainImageUrl)
-      }
-    }
-  }, [mainImageUrl])
-
   const handleMainImageChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
 
     if (!file) {
-      setMainImageUrl((previous) => {
-        if (previous) {
-          URL.revokeObjectURL(previous)
-        }
-        return null
-      })
+      onChange({ imageDataUrl: undefined })
       return
     }
 
-    const nextUrl = URL.createObjectURL(file)
-    setMainImageUrl((previous) => {
-      if (previous) {
-        URL.revokeObjectURL(previous)
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        onChange({ imageDataUrl: reader.result })
       }
-      return nextUrl
-    })
+    }
+    reader.readAsDataURL(file)
   }
 
   return (
@@ -77,8 +71,8 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Avatar className="h-9 w-9 border border-[#2b3139] bg-[#121418]">
-            {mainImageUrl ? (
-              <AvatarImage src={mainImageUrl} alt="" />
+            {character.imageDataUrl ? (
+              <AvatarImage src={character.imageDataUrl} alt="" />
             ) : null}
             <AvatarFallback className="bg-[#121418]" />
           </Avatar>
@@ -97,6 +91,8 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
             variant="destructive"
             className="bg-[#7c3a3a] text-[#f5dcdc] hover:bg-[#8f4343]"
             type="button"
+            onClick={onDelete}
+            disabled={!onDelete}
           >
             Delete
           </Button>
@@ -104,6 +100,8 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
             size="sm"
             className="bg-[#cfe7ff] text-[#10263a] hover:bg-[#deefff]"
             type="button"
+            onClick={onSave}
+            disabled={!onSave}
           >
             Save
           </Button>
@@ -141,9 +139,9 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
                   'transition-colors hover:border-[#3a414b]'
                 )}
               >
-                {mainImageUrl ? (
+                {character.imageDataUrl ? (
                   <img
-                    src={mainImageUrl}
+                    src={character.imageDataUrl}
                     alt=""
                     className="h-full w-full object-cover"
                   />
@@ -172,6 +170,10 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
                   <Textarea
                     id="global-system-prompt"
                     rows={2}
+                    value={character.globalPrompt}
+                    onChange={(event) =>
+                      onChange({ globalPrompt: event.target.value })
+                    }
                     className={cn(
                       textareaClassName,
                       'h-[52px] min-h-[52px]'
@@ -180,16 +182,13 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
                 </div>
 
                 <div className="w-full max-w-[360px] space-y-2">
-                  <Label
-                    htmlFor="character-name"
-                    className={labelClassName}
-                  >
+                  <Label htmlFor="character-name" className={labelClassName}>
                     Character Name
                   </Label>
                   <Input
                     id="character-name"
-                    value={characterName}
-                    onChange={(event) => setCharacterName(event.target.value)}
+                    value={character.name}
+                    onChange={(event) => onChange({ name: event.target.value })}
                     className={inputClassName}
                   />
                 </div>
@@ -197,8 +196,8 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
                 <div className="w-full max-w-[360px] space-y-2">
                   <Label className={labelClassName}>Voice</Label>
                   <Select
-                    value={selectedVoice}
-                    onValueChange={setSelectedVoice}
+                    value={character.voice}
+                    onValueChange={(value) => onChange({ voice: value })}
                   >
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select voice" />
@@ -218,6 +217,10 @@ function CharacterEditor({ voiceOptions = [] }: CharacterEditorProps) {
                 <Label className={labelClassName}>System Prompt</Label>
                 <Textarea
                   rows={4}
+                  value={character.systemPrompt}
+                  onChange={(event) =>
+                    onChange({ systemPrompt: event.target.value })
+                  }
                   className={cn(
                     textareaClassName,
                     'h-[96px] min-h-[96px]'

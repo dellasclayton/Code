@@ -1,10 +1,7 @@
 import { MessageCircle, Plus, Search } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type KeyboardEvent } from 'react'
 
-import characterOne from '@/assets/character-1.jpg'
-import characterTwo from '@/assets/character-2.jpg'
-import charactersArt from '@/assets/character-2.jpg'
-import agentsArt from '@/assets/character-1.jpg'
+import { type Character } from '@/components/characters/types'
 import { Button } from '@/components/ui/button'
 import {
   Item,
@@ -20,63 +17,23 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 
-type Character = {
-  id: string
-  name: string
-  systemPrompt: string
-  imageUrl?: string
+type CharacterDirectoryProps = {
+  characters: Character[]
+  selectedId?: string | null
+  onSelect: (characterId: string) => void
+  onCreate: () => void
 }
 
-const characters: Character[] = [
-  {
-    id: 'astra',
-    name: 'Astra Vale',
-    systemPrompt:
-      'Astra is a calm, tactical strategist who speaks in short, confident bursts. She balances warmth with authority, always grounding advice in clear next steps and practical risk checks.',
-    imageUrl: charactersArt,
-  },
-  {
-    id: 'beau',
-    name: 'Beau Harbor',
-    systemPrompt:
-      'Beau is a coastal guide with a bright, playful cadence. He uses sensory details and quick metaphors to make conversations feel immersive and easy to follow.',
-    imageUrl: agentsArt,
-  },
-  {
-    id: 'dahlia',
-    name: 'Dahlia North',
-    systemPrompt:
-      'Dahlia is deliberate and empathic. She summarizes what she hears in one sentence, then offers two clear paths forward with calm reassurance.',
-    imageUrl: characterOne,
-  },
-  {
-    id: 'ezra',
-    name: 'Dezra Finch',
-    systemPrompt:
-      'Ezra is concise and inquisitive, preferring rapid-fire clarifying questions before he commits to recommendations or next steps.',
-    imageUrl: characterTwo,
-  },
-  {
-    id: 'celeste',
-    name: 'Celeste Rowan',
-    systemPrompt:
-      'Celeste blends poetic imagery with precise technical clarity. She asks focused questions, then reframes answers into an actionable plan without losing nuance.',
-  },
-  {
-    id: 'noir',
-    name: 'Noir Kade',
-    systemPrompt:
-      'Noir is succinct, observant, and slightly sardonic. He prioritizes signal over noise, offering concise takeaways and a short list of options rather than long explanations.',
-  },
+const alphabet = [
+  '#',
+  ...Array.from({ length: 26 }, (_, index) =>
+    String.fromCharCode(65 + index)
+  ),
 ]
-
-const alphabet = Array.from({ length: 26 }, (_, index) =>
-  String.fromCharCode(65 + index)
-)
 
 const groupCharactersByLetter = (items: Character[]) =>
   items.reduce<Record<string, Character[]>>((groups, character) => {
-    const letter = character.name.charAt(0).toUpperCase()
+    const letter = character.name.trim().charAt(0).toUpperCase() || '#'
     if (!groups[letter]) {
       groups[letter] = []
     }
@@ -84,10 +41,12 @@ const groupCharactersByLetter = (items: Character[]) =>
     return groups
   }, {})
 
+const getLetterAnchor = (letter: string) => (letter === '#' ? 'misc' : letter)
+
 const getPromptPreview = (prompt: string, limit = 100) => {
   const trimmed = prompt.trim()
   if (!trimmed) {
-    return 'No system prompt yet.'
+    return ''
   }
   if (trimmed.length <= limit) {
     return trimmed
@@ -107,7 +66,12 @@ const getFallbackInitials = (name: string) => {
   return initials || 'CH'
 }
 
-function CharacterDirectory() {
+function CharacterDirectory({
+  characters,
+  selectedId,
+  onSelect,
+  onCreate,
+}: CharacterDirectoryProps) {
   const [query, setQuery] = useState('')
   const normalizedQuery = query.trim().toLowerCase()
 
@@ -120,7 +84,7 @@ function CharacterDirectory() {
       const haystack = `${character.name} ${character.systemPrompt}`.toLowerCase()
       return haystack.includes(normalizedQuery)
     })
-  }, [normalizedQuery])
+  }, [characters, normalizedQuery])
 
   const groupedCharacters = useMemo(() => {
     const grouped = groupCharactersByLetter(filteredCharacters)
@@ -138,9 +102,21 @@ function CharacterDirectory() {
   )
 
   const jumpToLetter = (letter: string) => {
-    const target = document.getElementById(`character-letter-${letter}`)
+    const target = document.getElementById(
+      `character-letter-${getLetterAnchor(letter)}`
+    )
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
+  const handleItemKeyDown = (
+    event: KeyboardEvent<HTMLDivElement>,
+    characterId: string
+  ) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onSelect(characterId)
     }
   }
 
@@ -175,6 +151,7 @@ function CharacterDirectory() {
               'border-[#2f353d] bg-[#1e2228] text-[#cbd2da]',
               'hover:border-[#3b424c] hover:bg-[#252a32] hover:text-white'
             )}
+            onClick={onCreate}
           >
             <Plus className="h-4 w-4 text-[#7fd2ff]" />
           </Button>
@@ -190,74 +167,99 @@ function CharacterDirectory() {
                     return (
                       <section
                         key={letter}
-                        id={`character-letter-${letter}`}
+                        id={`character-letter-${getLetterAnchor(letter)}`}
                         className="scroll-mt-6 space-y-3"
                       >
                         <div className="text-[11px] font-semibold uppercase tracking-[0.4em] text-[#8b93a0]">
                           {letter}
                         </div>
                         <ItemGroup>
-                          {items.map((character, index) => (
-                            <div key={character.id}>
-                              <Item
-                                role="listitem"
-                                size="sm"
-                                className={cn(
-                                  'min-h-[112px] gap-4 py-2 border-[#2a2f36] bg-[#1a1d22]/80',
-                                  'hover:bg-[#22262d]'
-                                )}
-                              >
-                                <ItemMedia className="h-24 w-16 overflow-hidden rounded-[10px] border border-[#2b3139] bg-[#101418]">
-                                  {character.imageUrl ? (
-                                    <img
-                                      src={character.imageUrl}
-                                      alt={character.name}
-                                      className="h-full w-full object-cover"
-                                    />
-                                  ) : (
-                                    <div className="flex h-full w-full items-center justify-center text-[11px] font-semibold text-[#aeb6c2]">
-                                      {getFallbackInitials(character.name)}
-                                    </div>
+                          {items.map((character, index) => {
+                            const isSelected = selectedId === character.id
+                            const promptPreview = getPromptPreview(
+                              character.systemPrompt
+                            )
+                            return (
+                              <div key={character.id}>
+                                <Item
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-pressed={isSelected}
+                                  onClick={() => onSelect(character.id)}
+                                  onKeyDown={(event) =>
+                                    handleItemKeyDown(event, character.id)
+                                  }
+                                  size="sm"
+                                  className={cn(
+                                    'min-h-[112px] gap-4 py-2 border-[#2a2f36] bg-[#1a1d22]/80',
+                                    'cursor-pointer hover:bg-[#22262d]',
+                                    'focus-visible:border-[#4aa3ff] focus-visible:ring-[#4aa3ff]/40',
+                                    isSelected
+                                      ? 'border-[#4aa3ff]/60 bg-[#1d222b] shadow-[0_0_0_1px_rgba(74,163,255,0.25)]'
+                                      : null
                                   )}
-                                </ItemMedia>
-                                <ItemContent className="gap-2">
-                                  <ItemTitle className="w-full">
-                                    <span className="text-sm font-semibold text-[#e2e6ea]">
-                                      {character.name}
-                                    </span>
-                                  </ItemTitle>
-                                  <ItemDescription className="text-[#8b93a0]">
-                                    {getPromptPreview(character.systemPrompt)}
-                                  </ItemDescription>
-                                </ItemContent>
-                                <ItemActions>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className={cn(
-                                      'border-[#2f353d] bg-[#1e2228] text-[#cbd2da]',
-                                      'hover:border-[#3b424c] hover:bg-[#252a32] hover:text-white'
+                                >
+                                  <ItemMedia className="h-24 w-16 overflow-hidden rounded-[10px] border border-[#2b3139] bg-[#101418]">
+                                    {character.imageDataUrl ? (
+                                      <img
+                                        src={character.imageDataUrl}
+                                        alt={character.name}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="flex h-full w-full items-center justify-center text-[11px] font-semibold text-[#aeb6c2]">
+                                        {getFallbackInitials(character.name)}
+                                      </div>
                                     )}
-                                  >
-                                    <MessageCircle className="h-4 w-4 text-[#7fd2ff]" />
-                                    Chat
-                                  </Button>
-                                </ItemActions>
-                              </Item>
-                              {index < items.length - 1 ? (
-                                <ItemSeparator className="my-2 bg-[#2a2f36]" />
-                              ) : null}
-                            </div>
-                          ))}
+                                  </ItemMedia>
+                                  <ItemContent className="gap-2">
+                                    <ItemTitle className="w-full">
+                                      <span className="text-sm font-semibold text-[#e2e6ea]">
+                                        {character.name}
+                                      </span>
+                                    </ItemTitle>
+                                    {promptPreview ? (
+                                      <ItemDescription className="text-[#8b93a0]">
+                                        {promptPreview}
+                                      </ItemDescription>
+                                    ) : null}
+                                  </ItemContent>
+                                  <ItemActions>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className={cn(
+                                        'border-[#2f353d] bg-[#1e2228] text-[#cbd2da]',
+                                        'hover:border-[#3b424c] hover:bg-[#252a32] hover:text-white'
+                                      )}
+                                    >
+                                      <MessageCircle className="h-4 w-4 text-[#7fd2ff]" />
+                                      Chat
+                                    </Button>
+                                  </ItemActions>
+                                </Item>
+                                {index < items.length - 1 ? (
+                                  <ItemSeparator className="my-2 bg-[#2a2f36]" />
+                                ) : null}
+                              </div>
+                            )
+                          })}
                         </ItemGroup>
                       </section>
                     )
                   })}
                 </div>
               ) : (
-                <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-[#7a828c]">
-                  No characters match your search.
+                <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-2 text-center text-sm text-[#7a828c]">
+                  {characters.length ? (
+                    <span>No characters match your search.</span>
+                  ) : (
+                    <>
+                      <span className="text-[#a5adb8]">No characters yet.</span>
+                      <span>Create one to start building.</span>
+                    </>
+                  )}
                 </div>
               )}
             </div>
