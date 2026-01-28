@@ -708,6 +708,330 @@ async def connect(self, websocket: WebSocket):
 
 ---
 
+## Asyncio Task Lifecycle & Best Practices
+
+Understanding how asyncio tasks complete and how to properly manage their lifecycle is critical for avoiding phantom generations and resource leaks.
+
+### Task State Methods
+
+Every `asyncio.Task` has these key methods for checking state:
+
+```python
+task = asyncio.create_task(some_coroutine())
+
+# Check if task has completed (success, exception, OR cancelled)
+task.done()       # Returns bool
+
+# Check if task was cancelled
+task.cancelled()  # Returns bool
+
+# Get the result (raises exception if task failed or was cancelled)
+task.result()     # Returns result or raises
+
+# Get exception without re-raising (None if no exception)
+task.exception()  # Returns Exception or None
+```
+
+### Task Completion States
+
+A task transitions through these states:
+
+```
+PENDING ──┬──→ CANCELLED  (task.cancel() was called)
+          │
+          ├──→ FINISHED   (completed successfully, has result)
+          │
+          └──→ FAILED     (raised an exception)
+
+task.done() returns True for ALL three end states
+```
+
+### Proper Task Cleanup with try/except/finally
+
+**Current Problem:** We cancel tasks but don't properly wait for them or handle exceptions:
+
+```python
+# BAD: Current approach - no timeout, no exception handling
+if task and not task.done():
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass  # Swallows all errors, no timeout
+```
+
+**Better:** Use `asyncio.wait_for` with timeout and proper exception handling:
+
+```python
+async def stop_task_safely(task: asyncio.Task, name: str, timeout: float = 5.0):
+    """
+    Safely stop a task with proper cleanup.
+
+    1. Cancel the task
+    2. Wait for it to finish with timeout
+    3. Handle any exceptions
+    4. Log the final state
+    """
+    if task is None or task.done():
+        return
+
+    task.cancel()
+
+    try:
+        # Wait for task to actually finish (with timeout)
+        await asyncio.wait_for(task, timeout=timeout)
+
+    except asyncio.TimeoutError:
+        # Task didn't stop in time - this is a problem
+        logger.error(f"Task {name} did not stop within {timeout}s timeout")
+        # Task is still running! May need force cleanup
+
+    except asyncio.CancelledError:
+        # Expected - task was cancelled successfully
+        logger.debug(f"Task {name} cancelled successfully")
+
+    except Exception as e:
+        # Task raised an exception during cancellation
+        logger.error(f"Task {name} raised exception during shutdown: {e}")
+
+    finally:
+        # Always log final state for debugging
+        if task.done():
+            if task.cancelled():
+                logger.info(f"Task {name}: CANCELLED")
+            elif task.exception():
+                logger.warning(f"Task {name}: FAILED with {task.exception()}")
+            else:
+                logger.info(f"Task {name}: FINISHED successfully")
+        else:
+            logger.error(f"Task {name}: STILL RUNNING after cleanup!")
+```
+
+### Updated PipelineOrchestrator.stop()
+
+```python
+class PipelineOrchestrator:
+
+    async def stop(self, timeout: float = 5.0):
+        """
+        Stop all pipeline tasks gracefully with proper cleanup.
+
+        Args:
+            timeout: Max seconds to wait for each task to stop
+        """
+        if not self._running:
+            return
+
+        self._running = False
+        logger.info("Stopping pipeline tasks...")
+
+        # Cancel all tasks first (non-blocking)
+        for name, task in self._tasks.items():
+            if task and not task.done():
+                task.cancel()
+                logger.debug(f"Cancellation requested for {name}")
+
+        # Now wait for all tasks to finish with timeout
+        for name, task in self._tasks.items():
+            if task is None:
+                continue
+
+            try:
+                await asyncio.wait_for(task, timeout=timeout)
+
+            except asyncio.TimeoutError:
+                logger.error(f"Task {name} did not stop within {timeout}s")
+
+            except asyncio.CancelledError:
+                logger.debug(f"Task {name} cancelled")
+
+            except Exception as e:
+                logger.error(f"Task {name} error during shutdown: {e}")
+
+            finally:
+                # Log final state
+                self._log_task_state(name, task)
+
+        self._tasks.clear()
+        logger.info("All pipeline tasks stopped")
+
+    def _log_task_state(self, name: str, task: asyncio.Task):
+        """Log the final state of a task for debugging"""
+        if not task.done():
+            logger.error(f"  {name}: STILL RUNNING (leak!)")
+        elif task.cancelled():
+            logger.debug(f"  {name}: cancelled ✓")
+        elif task.exception():
+            logger.warning(f"  {name}: failed with {task.exception()}")
+        else:
+            logger.debug(f"  {name}: completed ✓")
+```
+
+### Waiting for Multiple Tasks
+
+Use `asyncio.gather()` or `asyncio.wait()` when stopping multiple tasks:
+
+```python
+async def stop_all_tasks(self, timeout: float = 10.0):
+    """Stop all tasks concurrently with overall timeout"""
+
+    if not self._tasks:
+        return
+
+    # Cancel all tasks
+    for task in self._tasks.values():
+        if task and not task.done():
+            task.cancel()
+
+    # Wait for all to finish (with overall timeout)
+    pending_tasks = [t for t in self._tasks.values() if t and not t.done()]
+
+    if pending_tasks:
+        try:
+            # return_exceptions=True prevents one exception from stopping others
+            results = await asyncio.wait_for(
+                asyncio.gather(*pending_tasks, return_exceptions=True),
+                timeout=timeout
+            )
+
+            # Check results for any unexpected exceptions
+            for task, result in zip(pending_tasks, results):
+                if isinstance(result, asyncio.CancelledError):
+                    pass  # Expected
+                elif isinstance(result, Exception):
+                    logger.error(f"Task {task.get_name()} failed: {result}")
+
+        except asyncio.TimeoutError:
+            logger.error(f"Some tasks did not stop within {timeout}s")
+            # Log which tasks are still running
+            for name, task in self._tasks.items():
+                if task and not task.done():
+                    logger.error(f"  {name} is STILL RUNNING")
+```
+
+### Alternative: asyncio.wait() with return_when
+
+For more control over which tasks to wait for:
+
+```python
+async def stop_with_wait(self, timeout: float = 10.0):
+    """Stop tasks using asyncio.wait for finer control"""
+
+    pending_tasks = {t for t in self._tasks.values() if t and not t.done()}
+
+    if not pending_tasks:
+        return
+
+    # Cancel all
+    for task in pending_tasks:
+        task.cancel()
+
+    # Wait until ALL are done, or timeout
+    done, still_pending = await asyncio.wait(
+        pending_tasks,
+        timeout=timeout,
+        return_when=asyncio.ALL_COMPLETED
+    )
+
+    # Handle completed tasks
+    for task in done:
+        if task.cancelled():
+            logger.debug(f"{task.get_name()}: cancelled")
+        elif task.exception():
+            logger.error(f"{task.get_name()}: {task.exception()}")
+
+    # Warn about tasks that didn't stop
+    for task in still_pending:
+        logger.error(f"{task.get_name()}: TIMEOUT - still running!")
+```
+
+### Checking Task Status in active_tasks Property
+
+```python
+@property
+def active_tasks(self) -> Dict[str, str]:
+    """
+    Return detailed status of each pipeline task.
+
+    Returns dict like:
+    {
+        "user_messages": "running",
+        "tts_synthesis": "cancelled",
+        "audio_streaming": "failed: ConnectionError"
+    }
+    """
+    status = {}
+    for name, task in self._tasks.items():
+        if task is None:
+            status[name] = "not_created"
+        elif not task.done():
+            status[name] = "running"
+        elif task.cancelled():
+            status[name] = "cancelled"
+        elif task.exception():
+            status[name] = f"failed: {type(task.exception()).__name__}"
+        else:
+            status[name] = "completed"
+    return status
+```
+
+### Key Takeaways
+
+| Method | Use For |
+|--------|---------|
+| `task.done()` | Check if task finished (any reason) |
+| `task.cancelled()` | Check if specifically cancelled |
+| `task.exception()` | Get exception without re-raising |
+| `task.result()` | Get return value (or raise exception) |
+| `asyncio.wait_for(task, timeout)` | Wait with timeout |
+| `asyncio.gather(*tasks, return_exceptions=True)` | Wait for multiple, collect results |
+| `asyncio.wait(tasks, timeout, return_when)` | Fine-grained multi-task waiting |
+
+### Pattern: Ensuring Clean Task Completion
+
+```python
+async def run_task_to_completion(
+    coro,
+    name: str,
+    timeout: float = 30.0
+) -> tuple[bool, Any]:
+    """
+    Run a coroutine as a task and ensure it completes cleanly.
+
+    Returns: (success: bool, result_or_exception)
+    """
+    task = asyncio.create_task(coro, name=name)
+
+    try:
+        result = await asyncio.wait_for(task, timeout=timeout)
+        logger.info(f"Task {name} completed successfully")
+        return (True, result)
+
+    except asyncio.TimeoutError:
+        logger.error(f"Task {name} timed out after {timeout}s")
+        task.cancel()
+        try:
+            await task  # Wait for cancellation to complete
+        except asyncio.CancelledError:
+            pass
+        return (False, TimeoutError(f"Task {name} timed out"))
+
+    except asyncio.CancelledError:
+        logger.info(f"Task {name} was cancelled")
+        return (False, asyncio.CancelledError())
+
+    except Exception as e:
+        logger.error(f"Task {name} failed: {e}")
+        return (False, e)
+
+    finally:
+        # Always verify task is done
+        if not task.done():
+            logger.error(f"Task {name} cleanup failed - task still running!")
+```
+
+---
+
 ## Generation Lifecycle & Completion Tracking
 
 This is critical for preventing phantom generations. The pipeline tasks are **long-running workers**, but each user message triggers a **generation cycle** that must complete cleanly before the next one starts.
