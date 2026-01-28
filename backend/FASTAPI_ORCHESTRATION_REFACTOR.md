@@ -708,6 +708,424 @@ async def connect(self, websocket: WebSocket):
 
 ---
 
+## Generation Lifecycle & Completion Tracking
+
+This is critical for preventing phantom generations. The pipeline tasks are **long-running workers**, but each user message triggers a **generation cycle** that must complete cleanly before the next one starts.
+
+### The Problem: No Explicit "Done" Signal
+
+Currently, the pipeline has implicit completion via sentinels (`is_final=True`), but:
+1. Nothing prevents a new generation from starting while the previous one is still in-flight
+2. No explicit tracking of "generation N is complete, ready for N+1"
+3. Queues can have items from multiple generations mixed together
+
+### Solution: Generation Tracker
+
+Add explicit generation lifecycle management:
+
+```python
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import Optional
+import asyncio
+
+class GenerationState(Enum):
+    IDLE = auto()           # Ready for new user message
+    PROCESSING_LLM = auto() # LLM is generating text
+    PROCESSING_TTS = auto() # TTS is synthesizing (LLM done)
+    STREAMING = auto()      # Audio streaming to client
+    COMPLETE = auto()       # All done, transitioning to IDLE
+
+
+@dataclass
+class GenerationContext:
+    """Tracks a single user message → response cycle"""
+    generation_id: str
+    user_message: str
+    state: GenerationState = GenerationState.IDLE
+
+    # Completion tracking
+    llm_complete: bool = False
+    tts_sentences_expected: int = 0
+    tts_sentences_complete: int = 0
+    audio_streams_complete: int = 0
+
+    # Events for coordination
+    llm_done_event: asyncio.Event = field(default_factory=asyncio.Event)
+    tts_done_event: asyncio.Event = field(default_factory=asyncio.Event)
+    audio_done_event: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def mark_llm_complete(self, sentence_count: int):
+        """Called when LLM finishes streaming all characters"""
+        self.llm_complete = True
+        self.tts_sentences_expected = sentence_count
+        self.state = GenerationState.PROCESSING_TTS
+        self.llm_done_event.set()
+
+    def mark_tts_sentence_complete(self):
+        """Called when one sentence's audio is fully synthesized"""
+        self.tts_sentences_complete += 1
+        if self.tts_sentences_complete >= self.tts_sentences_expected:
+            self.state = GenerationState.STREAMING
+            self.tts_done_event.set()
+
+    def mark_audio_stream_complete(self):
+        """Called when final audio chunk is sent to client"""
+        self.audio_streams_complete += 1
+        # Check if all expected audio streams are done
+        if self.audio_streams_complete >= self.tts_sentences_expected:
+            self.state = GenerationState.COMPLETE
+            self.audio_done_event.set()
+
+    @property
+    def is_complete(self) -> bool:
+        return self.state == GenerationState.COMPLETE
+
+
+class GenerationTracker:
+    """
+    Tracks generation lifecycle and ensures clean handoffs.
+
+    Prevents phantom generations by:
+    1. Only allowing one active generation at a time
+    2. Explicitly tracking completion of each stage
+    3. Providing clear "ready for next" signal
+    """
+
+    def __init__(self):
+        self._current: Optional[GenerationContext] = None
+        self._lock = asyncio.Lock()
+        self._generation_counter = 0
+
+    @property
+    def is_idle(self) -> bool:
+        """True if no generation is in progress"""
+        return self._current is None or self._current.is_complete
+
+    @property
+    def current_generation(self) -> Optional[GenerationContext]:
+        return self._current
+
+    async def start_generation(self, user_message: str) -> GenerationContext:
+        """
+        Start a new generation cycle.
+
+        If a previous generation is still running, wait for it to complete
+        or raise an error (depending on desired behavior).
+        """
+        async with self._lock:
+            # Option 1: Wait for previous generation (blocking)
+            if self._current and not self._current.is_complete:
+                logger.warning(f"Waiting for generation {self._current.generation_id} to complete")
+                await self._current.audio_done_event.wait()
+
+            # Option 2: Cancel previous generation (non-blocking, for interrupts)
+            # if self._current and not self._current.is_complete:
+            #     self._current.state = GenerationState.COMPLETE
+            #     # Clear queues here if needed
+
+            self._generation_counter += 1
+            gen_id = f"gen_{self._generation_counter}"
+
+            self._current = GenerationContext(
+                generation_id=gen_id,
+                user_message=user_message,
+                state=GenerationState.PROCESSING_LLM,
+            )
+
+            logger.info(f"Started generation {gen_id}: '{user_message[:50]}...'")
+            return self._current
+
+    def complete_generation(self):
+        """Mark current generation as complete and ready for cleanup"""
+        if self._current:
+            self._current.state = GenerationState.COMPLETE
+            logger.info(f"Completed generation {self._current.generation_id}")
+            # Don't clear _current yet - let start_generation handle the transition
+
+    def reset(self):
+        """Hard reset - used for interrupts"""
+        if self._current:
+            self._current.state = GenerationState.COMPLETE
+            self._current.llm_done_event.set()
+            self._current.tts_done_event.set()
+            self._current.audio_done_event.set()
+        self._current = None
+```
+
+### Integration with PipelineOrchestrator
+
+```python
+class PipelineOrchestrator:
+    def __init__(self, ...):
+        # ... existing init ...
+        self.generation_tracker = GenerationTracker()
+
+    async def _process_user_messages(self):
+        """Task 1: Process user messages with generation tracking"""
+        while self._running:
+            try:
+                user_message: str = await self.queues.transcribe_queue.get()
+
+                if not user_message or not user_message.strip():
+                    continue
+
+                # Start a new tracked generation
+                generation = await self.generation_tracker.start_generation(user_message)
+
+                # Process through LLM
+                sentence_count = await self.chat.process_message_prompt(
+                    user_message=user_message,
+                    sentence_queue=self.queues.sentence_queue,
+                    on_text_chunk=self.callbacks.on_text_chunk,
+                    on_text_stream_start=self.callbacks.on_text_stream_start,
+                    on_text_stream_stop=self.callbacks.on_text_stream_stop,
+                )
+
+                # Mark LLM stage complete
+                generation.mark_llm_complete(sentence_count)
+                logger.info(f"[{generation.generation_id}] LLM complete, {sentence_count} sentences queued")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error processing user message: {e}")
+
+    async def _process_tts_synthesis(self):
+        """Task 2: TTS with completion tracking"""
+        while self._running:
+            try:
+                sentence = await asyncio.wait_for(
+                    self.queues.sentence_queue.get(),
+                    timeout=0.05
+                )
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+            generation = self.generation_tracker.current_generation
+
+            if sentence.is_final:
+                # Pass through sentinel
+                await self.queues.audio_queue.put(AudioChunk(
+                    audio_bytes=b"",
+                    sentence_index=sentence.index,
+                    chunk_index=0,
+                    message_id=sentence.message_id,
+                    character_id=sentence.character_id,
+                    character_name=sentence.character_name,
+                    is_final=True,
+                ))
+
+                # Mark this sentence's TTS as complete
+                if generation:
+                    generation.mark_tts_sentence_complete()
+                    logger.info(f"[{generation.generation_id}] TTS sentence {sentence.index} complete")
+                continue
+
+            # Generate audio for sentence
+            chunk_index = 0
+            try:
+                async for pcm_bytes in self.speech.generate_audio_for_sentence(
+                    sentence.text,
+                    sentence.voice_id
+                ):
+                    await self.queues.audio_queue.put(AudioChunk(
+                        audio_bytes=pcm_bytes,
+                        sentence_index=sentence.index,
+                        chunk_index=chunk_index,
+                        message_id=sentence.message_id,
+                        character_id=sentence.character_id,
+                        character_name=sentence.character_name,
+                        is_final=False,
+                    ))
+                    chunk_index += 1
+            except Exception as e:
+                logger.error(f"TTS error for sentence {sentence.index}: {e}")
+
+    async def _stream_audio_to_client(self):
+        """Task 3: Audio streaming with completion tracking"""
+        current_message_id: Optional[str] = None
+
+        while self._running:
+            try:
+                chunk = await asyncio.wait_for(
+                    self.queues.audio_queue.get(),
+                    timeout=0.05
+                )
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+            generation = self.generation_tracker.current_generation
+
+            if chunk.is_final:
+                if self.callbacks.on_audio_stream_stop:
+                    await self.callbacks.on_audio_stream_stop(chunk)
+                current_message_id = None
+                self._suppress_audio = False
+
+                # Mark audio stream complete
+                if generation:
+                    generation.mark_audio_stream_complete()
+                    logger.info(f"[{generation.generation_id}] Audio stream complete for message {chunk.message_id}")
+
+                    # Check if entire generation is done
+                    if generation.is_complete:
+                        self.generation_tracker.complete_generation()
+                        logger.info(f"[{generation.generation_id}] ✓ Generation fully complete")
+                continue
+
+            # ... rest unchanged ...
+```
+
+### Updated ChatLLM to Return Sentence Count
+
+```python
+class ChatLLM:
+    async def process_message_prompt(self, ...) -> int:
+        """
+        Process user message and generate responses.
+
+        Returns: Total number of sentences queued for TTS
+        """
+        total_sentences = 0
+
+        for character in responding_characters:
+            message_id = str(uuid.uuid4())
+            messages = self.build_messages_for_character(character)
+
+            if on_text_stream_start:
+                await on_text_stream_start(character, message_id)
+
+            sentence_count, full_response = await self.stream_character_response(...)
+            total_sentences += sentence_count
+
+            if on_text_stream_stop:
+                await on_text_stream_stop(character, message_id, full_response)
+
+            # ... save to history ...
+
+        return total_sentences
+
+    async def stream_character_response(self, ...) -> tuple[int, str]:
+        """
+        Stream LLM response for a character.
+
+        Returns: (sentence_count, full_response_text)
+        """
+        sentence_index = 0
+        full_response = ""
+
+        # ... existing streaming code ...
+
+        # Final sentinel
+        await sentence_queue.put(TTSSentence(..., is_final=True))
+
+        return (sentence_index, full_response)  # Return count for tracking
+```
+
+### Generation Flow Diagram
+
+```
+User says: "Hey Alice and Bob"
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Generation gen_1                                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  State: PROCESSING_LLM                                          │
+│  ├── ChatLLM streams Alice's response                           │
+│  │   └── Queues sentences [0, 1, 2] + is_final sentinel         │
+│  ├── ChatLLM streams Bob's response                             │
+│  │   └── Queues sentences [0, 1] + is_final sentinel            │
+│  └── mark_llm_complete(sentence_count=5)                        │
+│                                                                 │
+│  State: PROCESSING_TTS                                          │
+│  ├── TTS processes Alice sentence 0 → audio chunks              │
+│  │   └── mark_tts_sentence_complete() [1/5]                     │
+│  ├── TTS processes Alice sentence 1 → audio chunks              │
+│  │   └── mark_tts_sentence_complete() [2/5]                     │
+│  ├── ... (continues for all sentences)                          │
+│  └── tts_done_event.set() when 5/5 complete                     │
+│                                                                 │
+│  State: STREAMING                                               │
+│  ├── Audio streamer sends Alice's audio                         │
+│  │   └── is_final → mark_audio_stream_complete() [1/2]          │
+│  ├── Audio streamer sends Bob's audio                           │
+│  │   └── is_final → mark_audio_stream_complete() [2/2]          │
+│  └── audio_done_event.set()                                     │
+│                                                                 │
+│  State: COMPLETE ✓                                              │
+│  └── Ready for gen_2                                            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Handling Interrupts with Generation Tracking
+
+```python
+async def restart(self):
+    """Restart pipeline - used for interrupts"""
+    # Force-complete current generation
+    self.generation_tracker.reset()
+
+    await self.stop()
+    self._clear_all_queues()
+    await self.start()
+
+    logger.info("Pipeline restarted, generation tracker reset")
+```
+
+### Key Benefits of Generation Tracking
+
+| Problem | Solution |
+|---------|----------|
+| Phantom audio from previous generation | Each chunk tied to generation_id, stale chunks ignored |
+| Overlapping generations | `start_generation()` waits for previous to complete |
+| "Is it done yet?" | Check `generation.is_complete` or await events |
+| Lost track of progress | `generation.state` shows exactly where we are |
+| Debug logging | Generation ID in all logs makes tracing easy |
+
+### Simpler Alternative: Completion Counter
+
+If the full `GenerationContext` feels heavy, a simpler approach tracks just the essentials:
+
+```python
+class SimpleGenerationTracker:
+    """Lightweight generation tracking"""
+
+    def __init__(self):
+        self._generation_id = 0
+        self._active_generation: Optional[str] = None
+        self._completion_event = asyncio.Event()
+        self._completion_event.set()  # Start as "ready"
+
+    async def begin(self) -> str:
+        """Start a new generation, wait if one is active"""
+        await self._completion_event.wait()  # Block until previous is done
+        self._completion_event.clear()
+
+        self._generation_id += 1
+        self._active_generation = f"gen_{self._generation_id}"
+        return self._active_generation
+
+    def complete(self):
+        """Mark current generation as done"""
+        self._active_generation = None
+        self._completion_event.set()  # Unblock next generation
+
+    def reset(self):
+        """Force reset for interrupts"""
+        self._active_generation = None
+        self._completion_event.set()
+```
+
+This ensures generations don't overlap: each `begin()` waits for the previous `complete()`.
+
+---
+
 ## Open Questions
 
 1. **Should Transcribe also be orchestrated?**
