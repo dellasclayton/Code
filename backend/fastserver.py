@@ -268,16 +268,11 @@ class Pipeline:
             ConversationCreate(active_characters=active_char_data)
         )
 
-    async def run_pipeline(self):
+    async def pipeline_tasks(self):
         """"""
 
 
-        #if self.user_message_task is None or self.user_message_task.done():
-            #self.user_message_task = asyncio.create_task(self.prep_user_message())
 
-
-        #if self.stream_character_audio is None or self.stream_character_audio.done():
-            #self.stream_character_audio = asyncio.create_task(self.stream_character_audio())
 
     async def stop_pipeline(self):
         """Cancel all tasks and wait for them to finish."""
@@ -368,6 +363,50 @@ class Pipeline:
                 repetition_penalty=1.0
             )
         return self.model_settings
+
+    def save_conversation_context(self, messages: List[Dict[str, str]], character: Character, model_settings: ModelSettings) -> str:
+        """Save the full conversation context to a JSON file for debugging.
+
+        Returns the filepath of the saved file.
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"conversation_context_{timestamp}.json"
+        filepath = os.path.join("backend", filename)
+
+        # Build the full request payload for inspection
+        context_data = {
+            "timestamp": datetime.now().isoformat(),
+            "character": {
+                "id": character.id,
+                "name": character.name,
+            },
+            "model_settings": {
+                "model": model_settings.model,
+                "temperature": model_settings.temperature,
+                "top_p": model_settings.top_p,
+                "min_p": model_settings.min_p,
+                "top_k": model_settings.top_k,
+                "frequency_penalty": model_settings.frequency_penalty,
+                "presence_penalty": model_settings.presence_penalty,
+                "repetition_penalty": model_settings.repetition_penalty,
+            },
+            "messages": [
+                {
+                    "role": msg.get("role", ""),
+                    "name": msg.get("name", ""),
+                    "content": msg.get("content", "")
+                }
+                for msg in messages
+            ],
+            "message_count": len(messages),
+            "conversation_history_count": len(self.conversation_history),
+        }
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(context_data, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"[DEBUG] Saved conversation context to: {filepath}")
+        return filepath
 
     def build_messages_for_character(self, character: Character) -> List[Dict[str, str]]:
         """Build the message list for OpenRouter API call."""
@@ -832,7 +871,7 @@ class WebSocketManager:
     async def initialize(self):
         """Initialize all pipeline components at startup"""
         
-        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        api_key = os.getenv("OPENROUTER_API_KEY", "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")
 
         self.transcribe = Transcribe(on_transcription_update=self.on_transcription_update,
                                      on_transcription_stabilized=self.on_transcription_stabilized,
@@ -841,7 +880,7 @@ class WebSocketManager:
         self.transcribe.set_event_loop(asyncio.get_event_loop())
 
         self.pipe = Pipeline(queues=self.queues, api_key=api_key)
-        await self.pipe.run_pipeline()
+        #await self.pipe.run_pipeline()
 
         logger.info("Pipeline Started")
 
@@ -863,9 +902,6 @@ class WebSocketManager:
 
     async def start_pipeline(self):
         """Start the voice transcription → LLM → TTS pipeline as background tasks."""
-        self._clear_queue(self.queues.transcribe_queue)
-        self._clear_queue(self.queues.sentence_queue)
-        self._clear_queue(self.queues.audio_queue)
 
         if self.speech and not self.speech.is_running:
             await self.speech.start()
@@ -1312,6 +1348,25 @@ class WebSocketManager:
                 "message_id": chunk.message_id,
             },
         })
+
+    async def prep_user_message(self):
+        """Background task: get user message from transcribe queue and process."""
+        while True:
+            try:
+                user_message: str = await self.queues.transcribe_queue.get()
+
+                if user_message and user_message.strip():
+                    await self.pipe.generate_character_response(
+                        user_message=user_message,
+                        sentence_queue=self.queues.sentence_queue,
+                        on_text_stream_chunk=ws_manager.text_stream_chunk,
+                        on_text_stream_start=ws_manager.text_stream_start,
+                        on_text_stream_stop=ws_manager.text_stream_stop,
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error processing user message: {e}")
 
     async def stream_audio_to_client(self):
         """Background task: stream synthesized audio chunks to the client."""
