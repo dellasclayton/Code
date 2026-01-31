@@ -1266,7 +1266,7 @@ class WebSocketManager:
             await self.speech.start()
 
         if self.user_message_task is None or self.user_message_task.done():
-            self.user_message_task = asyncio.create_task(self.get_user_messages())
+            self.user_message_task = asyncio.create_task(self.get_user_message())
 
         if self.audio_streamer_task is None or self.audio_streamer_task.done():
             self.audio_streamer_task = asyncio.create_task(self.stream_audio_to_client())
@@ -1336,7 +1336,7 @@ class WebSocketManager:
             if self.websocket:
                 await self.websocket.send_bytes(chunk.audio_bytes)
 
-    async def get_user_messages(self):
+    async def get_user_message(self):
         """Background task: get user message from transcribe queue and process."""
         while True:
             try:
