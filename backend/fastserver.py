@@ -659,7 +659,7 @@ class Speech:
     async def start(self):
         """Start TTS Worker"""
         self.is_running = True
-        self.task = asyncio.create_task(self.process_sentences())
+        self.task = asyncio.create_task(self.synthesize_speech())
 
     async def stop(self):
         """Stop TTS Worker"""
@@ -672,7 +672,7 @@ class Speech:
             except asyncio.CancelledError:
                 pass
 
-    async def process_sentences(self):
+    async def synthesize_speech(self):
         """Process Sentences - Synthesize Audio"""
         while self.is_running:
             try:
@@ -703,7 +703,7 @@ class Speech:
 
             chunk_index = 0
             try:
-                async for pcm_bytes in self.generate_audio_for_sentence(sentence.text, sentence.voice_id):
+                async for pcm_bytes in self.generate_streaming_audio(sentence.text, sentence.voice_id):
                     audio_chunk = AudioChunk(
                         audio_bytes=pcm_bytes,
                         sentence_index=sentence.index,
@@ -738,7 +738,7 @@ class Speech:
 
         return messages
 
-    async def generate_audio_for_sentence(self, text: str, voice: str) -> AsyncGenerator[bytes, None]:
+    async def generate_streaming_audio(self, text: str, voice: str) -> AsyncGenerator[bytes, None]:
         """Generate audio for text using Higgs streaming"""
 
         messages = self.load_voice_reference(voice)
@@ -871,7 +871,7 @@ class WebSocketManager:
     async def initialize(self):
         """Initialize all pipeline components at startup"""
         
-        api_key = os.getenv("OPENROUTER_API_KEY", "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")
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
 
         self.transcribe = Transcribe(on_transcription_update=self.on_transcription_update,
                                      on_transcription_stabilized=self.on_transcription_stabilized,
