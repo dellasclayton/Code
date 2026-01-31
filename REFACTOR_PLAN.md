@@ -18,31 +18,38 @@ This makes it hard to reason about the conversation turn lifecycle and difficult
 ## Proposed Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   FastAPI App                        │
-│                                                      │
-│  /ws endpoint                                        │
-│    │                                                 │
-│    ▼                                                 │
-│  WebSocketRouter                                     │
-│    ├── routes text messages to handlers              │
-│    ├── routes audio bytes to Transcribe              │
-│    └── owns the WebSocket send function              │
-│         │                                            │
-│         ├── DB handlers (thin CRUD dispatch)         │
-│         │                                            │
-│         └── ConversationTurn (one per user turn)     │
-│              ├── drives LLM streaming                │
-│              ├── feeds sentence_queue                 │
-│              ├── emits client events via callback     │
-│              └── waitable / cancellable               │
-│                                                      │
-│  Speech (long-lived background worker, unchanged)    │
-│    └── sentence_queue → audio_queue                  │
-│                                                      │
-│  AudioStreamer (long-lived background task)           │
-│    └── audio_queue → websocket.send_bytes            │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                       FastAPI App                             │
+│                                                               │
+│  /ws endpoint                                                 │
+│    │                                                          │
+│    ▼                                                          │
+│  WebSocketRouter                                              │
+│    ├── routes text messages to handlers                       │
+│    ├── routes audio bytes to Transcribe                       │
+│    ├── owns the WebSocket send function                       │
+│    ├── DB handlers (thin CRUD dispatch)                       │
+│    │                                                          │
+│    └── manages background tasks:                              │
+│         ├── turn_loop_task  (sequential turn processing)      │
+│         ├── tts_worker_task (Speech.run — long-lived)         │
+│         └── audio_stream_task (AudioStreamer — long-lived)    │
+│                                                               │
+│  ConversationTurn (one per user turn, created by turn_loop)   │
+│    ├── drives LLM streaming                                   │
+│    ├── sends text_stream_start before chunks                  │
+│    ├── sends text_stream_stop after all chunks                │
+│    ├── feeds sentence_queue for TTS                           │
+│    └── cancel-safe for interrupts                             │
+│                                                               │
+│  Speech (TTS worker — long-lived background task)             │
+│    └── sentence_queue → audio_queue                           │
+│                                                               │
+│  AudioStreamer (long-lived background task)                    │
+│    ├── audio_queue → websocket                                │
+│    ├── sends audio_stream_start before first chunk            │
+│    └── sends audio_stream_stop on final sentinel              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Core idea
@@ -51,11 +58,93 @@ This makes it hard to reason about the conversation turn lifecycle and difficult
 
 ---
 
+## Task Organization (`asyncio.create_task`)
+
+Three long-lived background tasks run for the lifetime of a WebSocket connection. They are created in `WebSocketRouter.connect()` and cancelled in `disconnect()`.
+
+```
+WebSocketRouter.connect()
+  │
+  ├── create_task(self._turn_loop())        # Task 1: sequential turn processing
+  │     └── awaits one ConversationTurn at a time
+  │          └── (the turn itself is NOT a separate task — just awaited inline)
+  │
+  ├── create_task(self.speech.run())         # Task 2: TTS worker
+  │     └── long-lived loop: sentence_queue → generate audio → audio_queue
+  │
+  └── create_task(audio_streamer(...))       # Task 3: audio delivery
+        └── long-lived loop: audio_queue → websocket.send_bytes
+```
+
+**Why three tasks?** Each task blocks on a different queue. They must run concurrently so the pipeline flows without back-pressure:
+
+| Task | Blocks on | Produces |
+|------|-----------|----------|
+| `_turn_loop` | `_turn_queue` (user messages) | LLM tokens → `sentence_queue` |
+| `speech.run` | `sentence_queue` | PCM audio → `audio_queue` |
+| `audio_streamer` | `audio_queue` | bytes → websocket |
+
+**What is NOT a task:**
+- `ConversationTurn.run()` — awaited directly inside `_turn_loop`, not spawned as a separate task. This keeps turn sequencing simple (one turn finishes before the next starts) while still being cancellable because `_turn_loop` itself is a task.
+- STT transcription — runs in its own `threading.Thread` (unchanged), bridges to async via `run_coroutine_threadsafe`.
+
+**Lifecycle:**
+
+```python
+async def connect(self, websocket: WebSocket):
+    await websocket.accept()
+    self.websocket = websocket
+    await self.chat.start_new_chat()
+
+    # Start all three background tasks
+    self._turn_loop_task = asyncio.create_task(self._turn_loop())
+    self._tts_worker_task = asyncio.create_task(self.speech.run())
+    self._audio_stream_task = asyncio.create_task(audio_streamer(
+        self.queues.audio_queue, self.send_json, self._send_bytes,
+        self._sample_rate,
+    ))
+
+async def disconnect(self):
+    self.transcribe.stop_listening()
+    # Cancel turn first (stops producing sentences)
+    await self._cancel_task(self._turn_loop_task)
+    # Then TTS (stops producing audio)
+    await self._cancel_task(self._tts_worker_task)
+    # Then audio streamer (stops sending)
+    await self._cancel_task(self._audio_stream_task)
+    self.websocket = None
+
+async def _cancel_task(self, task: Optional[asyncio.Task]):
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+```
+
+**Interrupt** only cancels the current turn — the three long-lived tasks keep running:
+
+```python
+async def _handle_interrupt(self, _payload: dict):
+    await self._cancel_current_turn()    # kills the in-flight ConversationTurn
+    clear_queue(self.queues.sentence_queue)
+    clear_queue(self.queues.audio_queue)
+    await self.send_json({"type": "interrupt_ack"})
+    # _turn_loop is still alive, waiting for next message from _turn_queue
+    # speech.run is still alive, waiting for next sentence
+    # audio_streamer is still alive, waiting for next chunk
+```
+
+---
+
 ## New Components
 
 ### 1. `ConversationTurn`
 
 Replaces `get_user_message` loop + the callbacks threaded through `process_message_prompt`. A turn owns the full lifecycle of one user message through all responding characters.
+
+The event ordering for text is strictly: `text_stream_start` → N × `text_chunk` → `text_stream_stop`. No chunk arrives before the start signal, and stop always comes after all chunks.
 
 ```python
 @dataclass
@@ -92,11 +181,17 @@ class ConversationTurn:
 
     async def _run_character(self, character: Character, message_id: str,
                              model_settings: ModelSettings) -> None:
-        """Stream one character's response: LLM → sentences → queue."""
+        """Stream one character's response: LLM → sentences → queue.
+
+        Event order guaranteed:
+          1. text_stream_start
+          2. text_chunk (× N, is_final=False)
+          3. text_stream_stop  (carries full_response)
+        """
 
         messages = self.chat.build_messages_for_character(character)
 
-        # Notify client: text stream starting
+        # 1. text_stream_start — before any chunks
         await self.send({
             "type": "text_stream_start",
             "data": {"character_id": character.id,
@@ -104,6 +199,7 @@ class ConversationTurn:
                      "message_id": message_id},
         })
 
+        # 2. Stream LLM → text_chunk events fire via _on_text_chunk callback
         full_response = await self.chat.stream_character_response(
             messages=messages,
             character=character,
@@ -113,18 +209,13 @@ class ConversationTurn:
             on_text_chunk=self._on_text_chunk,
         )
 
-        # Notify client: text stream done
-        await self.send({
-            "type": "text_chunk",
-            "data": {"text": "", "character_id": character.id,
-                     "character_name": character.name,
-                     "message_id": message_id, "is_final": True},
-        })
+        # 3. text_stream_stop — after all chunks
         await self.send({
             "type": "text_stream_stop",
             "data": {"character_id": character.id,
                      "character_name": character.name,
-                     "message_id": message_id, "text": full_response},
+                     "message_id": message_id,
+                     "text": full_response},
         })
 
         # Update history + persist
@@ -154,16 +245,83 @@ class ConversationTurn:
 
 ---
 
-### 2. `AudioStreamer` (extracted from WebSocketManager)
+### 2. `Speech` (TTS Worker — updated)
 
-A standalone async task that drains `audio_queue` and pushes to the websocket. Currently lives as `stream_audio_to_client` inside WebSocketManager — just pull it out as a function.
+The existing `Speech` class stays mostly the same, but we rename `process_sentences` → `run` to match the task convention, and `start()`/`stop()` go away since the router manages the task directly.
+
+```python
+class Speech:
+    """TTS worker: sentence_queue → audio_queue."""
+
+    # __init__, initialize, generate_audio_for_sentence, etc. — unchanged
+
+    async def run(self):
+        """Long-running task: pull sentences, synthesize, push audio chunks.
+
+        Called as: create_task(speech.run())
+        Cancelled via: task.cancel()
+        """
+        while True:
+            try:
+                sentence: TTSSentence = await asyncio.wait_for(
+                    self.queues.sentence_queue.get(), timeout=0.1
+                )
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+            # Pass through end-of-message sentinels
+            if sentence.is_final:
+                await self.queues.audio_queue.put(AudioChunk(
+                    audio_bytes=b"", sentence_index=sentence.index,
+                    chunk_index=0, message_id=sentence.message_id,
+                    character_id=sentence.character_id,
+                    character_name=sentence.character_name, is_final=True,
+                ))
+                continue
+
+            # Generate audio and push chunks
+            chunk_index = 0
+            try:
+                async for pcm_bytes in self.generate_audio_for_sentence(
+                    sentence.text, sentence.voice_id
+                ):
+                    await self.queues.audio_queue.put(AudioChunk(
+                        audio_bytes=pcm_bytes, sentence_index=sentence.index,
+                        chunk_index=chunk_index, message_id=sentence.message_id,
+                        character_id=sentence.character_id,
+                        character_name=sentence.character_name, is_final=False,
+                    ))
+                    chunk_index += 1
+            except Exception as e:
+                logger.error(f"[TTS] Error generating audio: {e}")
+```
+
+### 3. `AudioStreamer` (extracted from WebSocketManager)
+
+A standalone async function that drains `audio_queue` and pushes to the websocket. Event ordering is strictly: `audio_stream_start` → N × `audio_chunk` → `audio_stream_stop`.
+
+**Why queue → AudioStreamer instead of streaming straight to the frontend from Speech?**
+Keeping the queue boundary gives us three things:
+1. **Decoupling** — Speech doesn't know about WebSocket; it just produces audio. AudioStreamer doesn't know about TTS; it just sends bytes. Either can be swapped independently.
+2. **Interrupt draining** — on interrupt we `clear_queue(audio_queue)` and everything pending is gone instantly. If Speech wrote directly to the websocket, we'd need to thread cancellation into the middle of `generate_audio_for_sentence`.
+3. **Back-pressure** — if the websocket send blocks (slow client), the queue absorbs it without stalling TTS generation. TTS can keep working on the next sentence.
+
+The tradeoff is one extra async hop per chunk. At audio chunk sizes (~14 codec frames → ~5ms of audio per chunk), the queue `.put()` / `.get()` overhead is negligible compared to the TTS generation and network send.
 
 ```python
 async def audio_streamer(audio_queue: asyncio.Queue,
                          send_json: Callable[[dict], Awaitable[None]],
                          send_bytes: Callable[[bytes], Awaitable[None]],
                          get_sample_rate: Callable[[], int]) -> None:
-    """Long-running task: drain audio_queue → websocket."""
+    """Long-running task: drain audio_queue → websocket.
+
+    Event order guaranteed per message_id:
+      1. audio_stream_start  (first chunk for a new message_id)
+      2. audio_chunk + raw bytes  (× N)
+      3. audio_stream_stop   (final sentinel)
+    """
     current_message_id: Optional[str] = None
 
     while True:
@@ -174,6 +332,18 @@ async def audio_streamer(audio_queue: asyncio.Queue,
         except asyncio.CancelledError:
             break
 
+        # 1. audio_stream_start — on first real chunk for a new message
+        if not chunk.is_final and current_message_id != chunk.message_id:
+            await send_json({
+                "type": "audio_stream_start",
+                "data": {"character_id": chunk.character_id,
+                         "character_name": chunk.character_name,
+                         "message_id": chunk.message_id,
+                         "sample_rate": get_sample_rate()},
+            })
+            current_message_id = chunk.message_id
+
+        # 3. audio_stream_stop — on final sentinel
         if chunk.is_final:
             await send_json({
                 "type": "audio_stream_stop",
@@ -184,16 +354,7 @@ async def audio_streamer(audio_queue: asyncio.Queue,
             current_message_id = None
             continue
 
-        if current_message_id != chunk.message_id:
-            await send_json({
-                "type": "audio_stream_start",
-                "data": {"character_id": chunk.character_id,
-                         "character_name": chunk.character_name,
-                         "message_id": chunk.message_id,
-                         "sample_rate": get_sample_rate()},
-            })
-            current_message_id = chunk.message_id
-
+        # 2. audio_chunk — send metadata JSON then raw PCM bytes
         await send_json({
             "type": "audio_chunk",
             "data": {"character_id": chunk.character_id,
@@ -207,7 +368,7 @@ async def audio_streamer(audio_queue: asyncio.Queue,
 
 ---
 
-### 3. `WebSocketRouter` (replaces WebSocketManager)
+### 4. `WebSocketRouter` (replaces WebSocketManager)
 
 Slim class that holds the websocket, dispatches messages, and manages the current turn.
 
@@ -224,9 +385,13 @@ class WebSocketRouter:
 
         self.websocket: Optional[WebSocket] = None
         self._current_turn: Optional[asyncio.Task] = None
-        self._audio_task: Optional[asyncio.Task] = None
-        self._turn_queue: asyncio.Queue[str] = asyncio.Queue()
+
+        # Long-lived background tasks (created in connect, cancelled in disconnect)
         self._turn_loop_task: Optional[asyncio.Task] = None
+        self._tts_worker_task: Optional[asyncio.Task] = None
+        self._audio_stream_task: Optional[asyncio.Task] = None
+
+        self._turn_queue: asyncio.Queue[str] = asyncio.Queue()
 
     # -- connection lifecycle --
 
@@ -234,23 +399,30 @@ class WebSocketRouter:
         await websocket.accept()
         self.websocket = websocket
         await self.chat.start_new_chat()
-        await self.speech.start()
-        self._audio_task = asyncio.create_task(
-            audio_streamer(self.queues.audio_queue, self.send_json,
-                           self._send_bytes, self._sample_rate)
-        )
+
+        # Start all three background tasks
         self._turn_loop_task = asyncio.create_task(self._turn_loop())
+        self._tts_worker_task = asyncio.create_task(self.speech.run())
+        self._audio_stream_task = asyncio.create_task(audio_streamer(
+            self.queues.audio_queue, self.send_json,
+            self._send_bytes, self._sample_rate,
+        ))
 
     async def disconnect(self):
         self.transcribe.stop_listening()
-        await self._cancel_current_turn()
-        for task in (self._audio_task, self._turn_loop_task):
-            if task and not task.done():
-                task.cancel()
-                try: await task
-                except asyncio.CancelledError: pass
-        await self.speech.stop()
+        # Cancel in pipeline order: turn → tts → audio
+        await self._cancel_task(self._turn_loop_task)
+        await self._cancel_task(self._tts_worker_task)
+        await self._cancel_task(self._audio_stream_task)
         self.websocket = None
+
+    async def _cancel_task(self, task: Optional[asyncio.Task]):
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     # -- message dispatch --
 
@@ -365,7 +537,7 @@ class WebSocketRouter:
 
 ---
 
-### 4. `handle_db_message` (extracted CRUD dispatch)
+### 5. `handle_db_message` (extracted CRUD dispatch)
 
 All the character/voice/conversation/message CRUD handlers pulled out of the class into a single function. This is ~200 lines of mechanical dispatch that doesn't belong in the router.
 
@@ -399,7 +571,7 @@ This could also be a dict-based dispatch table mapping message types to `(db_met
 |-----------|----------|-------|
 | `Transcribe` | No | Already well-isolated. Feeds `_turn_queue` via callback. |
 | `ChatLLM` | Minor | Remove `process_message_prompt` — that logic moves to `ConversationTurn`. Keep `stream_character_response`, `build_messages_for_character`, history management, etc. |
-| `Speech` | No | Already a clean queue consumer. |
+| `Speech` | Minor | Rename `process_sentences` → `run`. Remove `start()`/`stop()`/`is_running`/`_task` — the router owns the task lifecycle now. Core TTS logic unchanged. |
 | `PipeQueues` | No | Unchanged. |
 | Data classes (`TTSSentence`, `AudioChunk`, `ModelSettings`) | No | Unchanged. |
 | `revert_delay_pattern` | No | Standalone function, stays as-is. |
@@ -504,3 +676,5 @@ Each step is independently testable. Steps 1–3 are pure additions with no brea
 2. **`_suppress_audio` flag:** This is set during interrupts but the current logic around it seems incomplete (set to `False` on init/interrupt, never set to `True`). Should we drop it or is there planned usage?
 
 3. **Multi-file split:** Do you want to split into separate files as part of this refactor, or keep everything in `fastserver.py` first and split later?
+
+4. **`text_chunk` with `is_final`:** The old code sent a final `text_chunk` with `is_final: True` and empty text right before `text_stream_stop`. The updated plan drops that — `text_stream_stop` carries the `full_response` and serves as the definitive end signal. Does the frontend rely on the `is_final` chunk, or can we remove it?
